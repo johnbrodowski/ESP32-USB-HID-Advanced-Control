@@ -1,12 +1,12 @@
 ![ESP32-S3-GEEK-details-3](https://github.com/user-attachments/assets/9e503acd-031d-4f37-86e6-19d1264eda6a)
 
-![Screenshot_19-12-2025_232920_192 168 0 107](https://github.com/user-attachments/assets/955b4613-455c-4638-8c1f-c5ea49fc2205)
+![root](https://github.com/user-attachments/assets/10118534-a6a5-4a7e-a1b0-ee548673e9cc)
+ 
+![settings](https://github.com/user-attachments/assets/9e988a10-c6ec-4163-9c33-e259335031a5)
+ 
+![duck](https://github.com/user-attachments/assets/db9758d4-656b-44e6-911a-0cee96083963)
 
-![Screenshot_19-12-2025_233025_192 168 0 107](https://github.com/user-attachments/assets/72d911df-7757-478c-a5e4-b85ba8cefac9)
-
-![Screenshot_19-12-2025_233140_192 168 0 107](https://github.com/user-attachments/assets/85112af6-9876-4cd7-a82a-9d4870d3b361)
-
-![Screenshot_19-12-2025_233311_192 168 0 107](https://github.com/user-attachments/assets/6e7ab06b-eae1-432f-8c1a-650d250f0e6f)
+![file](https://github.com/user-attachments/assets/76e86718-f617-4899-b7d4-4737b6a089d2)
 
  
 # ESP32 Advanced Control
