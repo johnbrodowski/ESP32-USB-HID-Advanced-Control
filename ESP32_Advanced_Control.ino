@@ -270,14 +270,15 @@ void handleLogout() {
 
 
 
-
-
-
-
-
+// ============================================================================
+// HTML PAGE HANDLERS - Updated UI with modern design, toast notifications,
+// improved responsiveness, and better UX
+// ============================================================================
 
 void handleRoot() {
+    if (!checkAuth()) return;
     logRequest(server);
+    
     String html = R"WEBUI(
 <!DOCTYPE html>
 <html lang="en">
@@ -285,51 +286,110 @@ void handleRoot() {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 Advanced Control</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.34.0/min/vs/loader.js"></script>
     <style>
-        :root{--bg-color:#2c3e50;--primary-color:#34495e;--secondary-color:#2980b9;--font-color:#ecf0f1;--border-color:#2980b9;--success-color:#27ae60;--danger-color:#c0392b;--output-bg:#1e2b38;--good-color:#2ecc71;--bad-color:#e74c3c}
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--danger:#ff6b6b;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
         *{box-sizing:border-box;margin:0;padding:0}
-        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background-color:var(--bg-color);color:var(--font-color);line-height:1.6}
-        .container{max-width:1400px;margin:auto;padding:20px}
-        header{background:var(--primary-color);padding:1rem;margin-bottom:20px;border-radius:8px;text-align:center}
-        nav a{color:var(--font-color);text-decoration:none;padding:5px 15px;border-radius:5px;transition:background-color .3s;display:inline-block;margin:0 5px}
-        nav a:hover{background-color:var(--secondary-color)}
-        .main-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(450px,1fr));gap:20px}
-        .card{background:var(--primary-color);border-radius:8px;padding:20px;box-shadow:0 4px 8px rgba(0,0,0,.2);display:flex;flex-direction:column}
-        .card h2{margin-top:0;margin-bottom:15px;border-bottom:2px solid var(--secondary-color);padding-bottom:10px}
-        input,select,button,textarea{width:100%;padding:12px;margin-bottom:10px;border-radius:5px;border:1px solid var(--border-color);background-color:var(--bg-color);color:var(--font-color);font-size:1rem}
-        button{background-color:var(--secondary-color);border:none;cursor:pointer;transition:background-color .3s;font-weight:bold}
-        button.success{background-color:var(--success-color)}
-        button.danger{background-color:var(--danger-color)}
-        textarea{resize:vertical;min-height:120px;font-family:"Courier New",Courier,monospace}
-        .status-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
-        .info-label{color:var(--secondary-color);font-weight:bold}
-        .info-value{color:var(--font-color)}
-        .admin-true{color:var(--good-color);font-weight:bold}
-        .admin-false{color:var(--bad-color);font-weight:bold}
-        #editorContainer{width:100%;height:400px;border:1px solid var(--border-color);border-radius:5px;margin-bottom:10px}
-        .log-panel{background-color:var(--output-bg);height:200px;overflow-y:scroll;padding:10px;border-radius:5px;font-family:'Courier New',monospace;white-space:pre-wrap;margin-bottom:10px;flex-grow:1}
-        .log-panel:empty::before{content:'Waiting for data...';color:#777}
-        .chat-message{margin-bottom:10px}
-        .chat-message pre{white-space:pre-wrap;word-wrap:break-word;margin-top:5px;padding:10px;background:var(--bg-color);border-radius:5px}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+        .container{max-width:1400px;margin:auto;padding:15px}
+        header{background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:20px;border-radius:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+        header h1{font-size:1.4rem;display:flex;align-items:center;gap:10px}
+        header h1::before{content:"⚡";font-size:1.6rem}
+        nav{display:flex;gap:8px;flex-wrap:wrap}
+        nav a{color:var(--text);text-decoration:none;padding:8px 16px;border-radius:8px;background:rgba(255,255,255,0.1);transition:all .2s;font-size:0.9rem}
+        nav a:hover{background:var(--accent);transform:translateY(-2px)}
+        .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:15px}
+        .card{background:var(--card);border-radius:12px;padding:20px;box-shadow:0 4px 20px rgba(0,0,0,.3);display:flex;flex-direction:column}
+        .card h2{margin-bottom:15px;padding-bottom:10px;border-bottom:2px solid var(--accent);font-size:1.1rem;display:flex;align-items:center;gap:8px}
+        input,select,button,textarea{width:100%;padding:12px;margin-bottom:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.95rem;transition:border-color .2s}
+        input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+        button{background:var(--secondary);border:none;cursor:pointer;font-weight:600;transition:all .2s}
+        button:hover{background:var(--accent);transform:translateY(-1px)}
+        button:active{transform:translateY(0)}
+        button.success{background:var(--success)}
+        button.danger{background:var(--danger)}
+        .status-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+        .status-item{background:var(--bg);padding:10px;border-radius:8px}
+        .info-label{color:var(--dim);font-size:0.8rem;display:block}
+        .info-value{font-weight:600;font-size:0.95rem}
+        .admin-true{color:var(--success);font-weight:bold}
+        .admin-false{color:var(--danger);font-weight:bold}
+        #editorContainer{width:100%;height:350px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden}
+        .log-panel{background:var(--bg);height:180px;overflow-y:auto;padding:12px;border-radius:8px;font-family:'Fira Code','Courier New',monospace;font-size:0.85rem;white-space:pre-wrap;flex-grow:1}
+        .log-panel:empty::before{content:'Waiting for data...';color:var(--dim)}
+        .chat-message{margin-bottom:12px;animation:fadeIn .3s}
+        .chat-message pre{white-space:pre-wrap;word-wrap:break-word;margin-top:8px;padding:12px;background:var(--bg);border-radius:8px;border-left:3px solid var(--accent)}
+        .btn-group{display:flex;gap:8px}
+        .btn-group button{flex:1}
+        .full-width{grid-column:1/-1}
+        .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999;animation:slideIn .3s;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+        .toast.success{background:var(--success)}
+        .toast.error{background:var(--danger)}
+        .toast.info{background:var(--secondary)}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+        @media(max-width:768px){.grid{grid-template-columns:1fr}header{flex-direction:column;text-align:center}nav{justify-content:center}.btn-group{flex-direction:column}}
+        .loading{position:relative;pointer-events:none;opacity:0.7}
+        .loading::after{content:"";position:absolute;top:50%;left:50%;width:20px;height:20px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite}
+        @keyframes spin{to{transform:rotate(360deg)}}
     </style>
 </head>
 <body>
     <div class="container">
-        <header><h1>ESP32 Advanced Control</h1>
+        <header>
+            <h1>ESP32 Advanced Control</h1>
             <nav>
-                <a href="/settings_page">Settings</a>
-                <a href="/ducky">Ducky Studio</a>
-                <a href="/file_manager">File Manager</a>
+                <a href="/settings_page">⚙️ Settings</a>
+                <a href="/ducky">🦆 Ducky Studio</a>
+                <a href="/file_manager">📁 Files</a>
+                <a href="/logout">🚪 Logout</a>
             </nav>
         </header>
-        <div class="main-grid">
-            <div class="card" style="grid-column: 1 / -1;"><h2>System Information</h2><div class="status-grid"><div><span class="info-label">Hostname:</span> <span id="info-hostname" class="info-value">...</span></div><div><span class="info-label">User:</span> <span id="info-user" class="info-value">...</span> (<span id="info-admin">...</span>)</div><div><span class="info-label">Operating System:</span> <span id="info-os" class="info-value">...</span></div><div><span class="info-label">Architecture:</span> <span id="info-arch" class="info-value">...</span></div></div></div>
-            <div class="card"><h2>Live Command Output</h2><div id="output-log" class="log-panel"></div></div>
-            <div class="card"><h2>Incoming Request Log</h2><div id="device-log-panel" class="log-panel"></div></div>
-            <div class="card"><h2>AI Assistant</h2><div id="chatbox" class="log-panel"></div><input type="text" id="userInput" placeholder="Ask AI to generate a script..."><button type="button" onclick="sendMessage()">Send to AI</button></div>
-            <div class="card"><h2>Device Status</h2><div class="status-grid"><div><span class="info-label">ESP32 IP:</span> <span id="status-ip" class="info-value">...</span></div><div><span class="info-label">Signal:</span> <span id="status-rssi" class="info-value">...</span></div><div><span class="info-label">Network:</span> <span id="status-ssid" class="info-value">...</span></div><div><span class="info-label">SD Card:</span> <span id="status-sd" class="info-value">...</span> MB free</div></div></div>
-            <div class="card" style="grid-column: 1 / -1;"><h2>Script Editor</h2><select id="scriptList" onchange="loadScript()"></select><input type="text" id="scriptName" placeholder="Enter new script name"><div id="editorContainer"></div><div style="display: flex; gap: 10px;"><button type="button" class="success" onclick="saveScript()">Save Script</button><button type="button" class="danger" onclick="deleteScript()">Delete Script</button><button type="button" class="success" onclick="executeScript()">Execute on Target</button></div></div>
+        <div class="grid">
+            <div class="card full-width">
+                <h2>📊 Target System Information</h2>
+                <div class="status-grid">
+                    <div class="status-item"><span class="info-label">Hostname</span><span id="info-hostname" class="info-value">...</span></div>
+                    <div class="status-item"><span class="info-label">User</span><span id="info-user" class="info-value">...</span> <span id="info-admin">...</span></div>
+                    <div class="status-item"><span class="info-label">Operating System</span><span id="info-os" class="info-value">...</span></div>
+                    <div class="status-item"><span class="info-label">Architecture</span><span id="info-arch" class="info-value">...</span></div>
+                </div>
+            </div>
+            <div class="card">
+                <h2>📡 Live Command Output</h2>
+                <div id="output-log" class="log-panel"></div>
+            </div>
+            <div class="card">
+                <h2>📋 Incoming Request Log</h2>
+                <div id="device-log-panel" class="log-panel"></div>
+            </div>
+            <div class="card">
+                <h2>🤖 AI Assistant</h2>
+                <div id="chatbox" class="log-panel"></div>
+                <input type="text" id="userInput" placeholder="Ask AI to generate a script..." onkeypress="if(event.key==='Enter')sendMessage()">
+                <button type="button" onclick="sendMessage()">Send to AI</button>
+            </div>
+            <div class="card">
+                <h2>📶 Device Status</h2>
+                <div class="status-grid">
+                    <div class="status-item"><span class="info-label">ESP32 IP</span><span id="status-ip" class="info-value">...</span></div>
+                    <div class="status-item"><span class="info-label">Signal Strength</span><span id="status-rssi" class="info-value">...</span></div>
+                    <div class="status-item"><span class="info-label">Network</span><span id="status-ssid" class="info-value">...</span></div>
+                    <div class="status-item"><span class="info-label">SD Card</span><span id="status-sd" class="info-value">...</span></div>
+                </div>
+            </div>
+            <div class="card full-width">
+                <h2>📝 Script Editor</h2>
+                <select id="scriptList" onchange="loadScript()"></select>
+                <input type="text" id="scriptName" placeholder="Enter new script name">
+                <div id="editorContainer"></div>
+                <div class="btn-group">
+                    <button type="button" class="success" onclick="saveScript()">💾 Save Script</button>
+                    <button type="button" class="danger" onclick="deleteScript()">🗑️ Delete Script</button>
+                    <button type="button" onclick="executeScript()">▶️ Execute on Target</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -341,18 +401,33 @@ void handleRoot() {
                 value: '# Paste a PowerShell script here, or select one to load.',
                 language: 'powershell',
                 theme: 'vs-dark',
-                automaticLayout: true
+                automaticLayout: true,
+                minimap: { enabled: false },
+                fontSize: 14,
+                scrollBeyondLastLine: false
             });
         });
+
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+        }
+
+        function escapeHtml(text) {
+            return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
 
         function setupEventSource() {
             const outputLog = document.getElementById('output-log');
             const eventSource = new EventSource('/events');
             
-            eventSource.onopen = () => console.log("SSE Connection for live output is open.");
+            eventSource.onopen = () => console.log("SSE Connection established");
             
             eventSource.addEventListener('message', (event) => {
-                outputLog.innerHTML += event.data.replace(/</g, "<").replace(/>/g, ">") + '\n';
+                outputLog.innerHTML += escapeHtml(event.data) + '\n';
                 outputLog.scrollTop = outputLog.scrollHeight;
             });
 
@@ -362,14 +437,17 @@ void handleRoot() {
                     document.getElementById('info-hostname').innerText = data.Hostname || 'N/A';
                     document.getElementById('info-user').innerText = data.CurrentUser || 'N/A';
                     const adminSpan = document.getElementById('info-admin');
-                    adminSpan.innerText = data.IsAdmin ? 'ADMIN' : 'User';
+                    adminSpan.innerText = data.IsAdmin ? '(ADMIN)' : '(User)';
                     adminSpan.className = data.IsAdmin ? 'admin-true' : 'admin-false';
                     document.getElementById('info-os').innerText = data.OS_Name || 'N/A';
                     document.getElementById('info-arch').innerText = data.OS_Architecture || 'N/A';
-                } catch(e) { console.error("Failed to parse sysinfo JSON:", e); }
+                } catch(e) { console.error("Failed to parse sysinfo:", e); }
             });
 
-            eventSource.onerror = () => { eventSource.close(); setTimeout(setupEventSource, 5000); };
+            eventSource.onerror = () => { 
+                eventSource.close(); 
+                setTimeout(setupEventSource, 5000); 
+            };
         }
         
         function fetchRequestLog() {
@@ -378,39 +456,141 @@ void handleRoot() {
                 .then(response => response.text())
                 .then(text => {
                     if (text) {
-                        deviceLogPanel.innerHTML += text.replace(/</g, "<").replace(/>/g, ">");
+                        deviceLogPanel.innerHTML += escapeHtml(text);
                         deviceLogPanel.scrollTop = deviceLogPanel.scrollHeight;
                     }
                 })
                 .catch(e => console.error("Failed to fetch request log:", e));
         }
 
-        function escapeHtml(text) {
-            return text.replace(/</g, "<").replace(/>/g, ">");
-        }
-
-        function sendMessage(){
+        function sendMessage() {
             var userInput = document.getElementById("userInput");
-            var message = userInput.value;
-            if(!message) return;
+            var message = userInput.value.trim();
+            if (!message) return;
+            
             var chatbox = document.getElementById("chatbox");
             chatbox.innerHTML += '<div class="chat-message"><strong>You:</strong> ' + escapeHtml(message) + '</div>';
             chatbox.scrollTop = chatbox.scrollHeight;
             userInput.value = "";
-            fetch("/submit", { method: "POST", headers: {"Content-Type":"application/x-www-form-urlencoded"}, body: "query=" + encodeURIComponent(message) })
-                .then(response => response.text())
-                .then(text => {
-                    chatbox.innerHTML += '<div class="chat-message"><strong>AI:</strong><pre>' + escapeHtml(text) + '</pre></div>';
-                    chatbox.scrollTop = chatbox.scrollHeight;
-                });
+            
+            fetch("/submit", { 
+                method: "POST", 
+                headers: {"Content-Type": "application/x-www-form-urlencoded"}, 
+                body: "query=" + encodeURIComponent(message) 
+            })
+            .then(response => response.text())
+            .then(text => {
+                chatbox.innerHTML += '<div class="chat-message"><strong>AI:</strong><pre>' + escapeHtml(text) + '</pre></div>';
+                chatbox.scrollTop = chatbox.scrollHeight;
+            })
+            .catch(e => showToast("AI request failed: " + e, "error"));
         }
         
-        function updateStatus(){fetch("/status").then(r=>r.json()).then(data=>{document.getElementById("status-ip").innerText=data.ip;document.getElementById("status-rssi").innerText=data.rssi+" dBm";document.getElementById("status-ssid").innerText=data.ssid;document.getElementById("status-sd").innerText=data.free_sd+" / "+data.total_sd}).catch(e=>console.error("Status update failed:",e))}
-        function executeScript(){var script=scriptEditor.getValue();if(!script){alert("Script content is empty!");return}fetch("/execute",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"script="+encodeURIComponent(script)})}
-        function saveScript(){var name=document.getElementById("scriptName").value;var content=scriptEditor.getValue();if(!name){alert("Script name is required!");return}fetch("/save_script",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:`name=${encodeURIComponent(name)}&content=${encodeURIComponent(content)}`}).then(r=>r.ok?alert("Script saved"):Promise.reject("Save failed")).then(()=>loadScriptList()).catch(e=>alert(e))}
-        function deleteScript(){var name=document.getElementById("scriptName").value;if(!name){alert("Select a script to delete!");return}fetch("/delete_script",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"name="+encodeURIComponent(name)}).then(r=>r.ok?alert("Script deleted"):Promise.reject("Delete failed")).then(()=>{loadScriptList();document.getElementById("scriptName").value="";scriptEditor.setValue("")}).catch(e=>alert(e))}
-        function loadScript(){var name=document.getElementById("scriptList").value;document.getElementById("scriptName").value=name;if(name){var path="/scripts/"+name+".txt";fetch("/files?path="+encodeURIComponent(path)).then(r=>r.ok?r.text():Promise.reject("File not found")).then(content=>scriptEditor.setValue(content)).catch(e=>{alert("Could not load script: "+e);scriptEditor.setValue("")})}else{scriptEditor.setValue("")}}
-        function loadScriptList(){fetch("/list_scripts").then(r=>r.json()).then(scripts=>{var list=document.getElementById("scriptList");list.innerHTML="<option value=''>Select a saved script</option>";scripts.forEach(script=>{list.innerHTML+=`<option value="${script}">${script}</option>`})})}
+        function updateStatus() {
+            fetch("/status")
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById("status-ip").innerText = data.ip;
+                    document.getElementById("status-rssi").innerText = data.rssi + " dBm";
+                    document.getElementById("status-ssid").innerText = data.ssid;
+                    document.getElementById("status-sd").innerText = data.free_sd + " / " + data.total_sd + " MB";
+                })
+                .catch(e => console.error("Status update failed:", e));
+        }
+
+        function executeScript() {
+            var script = scriptEditor.getValue();
+            if (!script.trim()) { 
+                showToast("Script content is empty!", "error"); 
+                return; 
+            }
+            showToast("Executing script...", "info");
+            fetch("/execute", {
+                method: "POST",
+                headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                body: "script=" + encodeURIComponent(script)
+            })
+            .then(r => r.ok ? showToast("Script execution initiated") : showToast("Execution failed", "error"))
+            .catch(e => showToast("Error: " + e, "error"));
+        }
+
+        function saveScript() {
+            var name = document.getElementById("scriptName").value.trim();
+            var content = scriptEditor.getValue();
+            if (!name) { 
+                showToast("Script name is required!", "error"); 
+                return; 
+            }
+            fetch("/save_script", {
+                method: "POST",
+                headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                body: "name=" + encodeURIComponent(name) + "&content=" + encodeURIComponent(content)
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast("Script saved successfully");
+                    loadScriptList();
+                } else {
+                    showToast("Failed to save script", "error");
+                }
+            })
+            .catch(e => showToast("Error: " + e, "error"));
+        }
+
+        function deleteScript() {
+            var name = document.getElementById("scriptName").value.trim();
+            if (!name) { 
+                showToast("Select a script to delete!", "error"); 
+                return; 
+            }
+            if (!confirm("Are you sure you want to delete '" + name + "'?")) return;
+            
+            fetch("/delete_script", {
+                method: "POST",
+                headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                body: "name=" + encodeURIComponent(name)
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast("Script deleted");
+                    loadScriptList();
+                    document.getElementById("scriptName").value = "";
+                    scriptEditor.setValue("");
+                } else {
+                    showToast("Failed to delete script", "error");
+                }
+            })
+            .catch(e => showToast("Error: " + e, "error"));
+        }
+
+        function loadScript() {
+            var name = document.getElementById("scriptList").value;
+            document.getElementById("scriptName").value = name;
+            if (name) {
+                var path = "/scripts/" + name + ".txt";
+                fetch("/files?path=" + encodeURIComponent(path))
+                    .then(r => r.ok ? r.text() : Promise.reject("File not found"))
+                    .then(content => scriptEditor.setValue(content))
+                    .catch(e => {
+                        showToast("Could not load script: " + e, "error");
+                        scriptEditor.setValue("");
+                    });
+            } else {
+                scriptEditor.setValue("");
+            }
+        }
+
+        function loadScriptList() {
+            fetch("/list_scripts")
+                .then(r => r.json())
+                .then(scripts => {
+                    var list = document.getElementById("scriptList");
+                    list.innerHTML = "<option value=''>Select a saved script</option>";
+                    scripts.forEach(script => {
+                        list.innerHTML += '<option value="' + script + '">' + script + '</option>';
+                    });
+                });
+        }
 
         window.onload = () => {
             loadScriptList();
@@ -427,11 +607,13 @@ void handleRoot() {
 }
 
 
-
- 
-
+// ============================================================================
+// Settings Page
+// ============================================================================
 void handleSettingsPage() {
-    logRequest(server); // Add logging
+    if (!checkAuth()) return;
+    logRequest(server);
+    
     String html = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
@@ -439,67 +621,110 @@ void handleSettingsPage() {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 Settings</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
     <style>
-        :root {
-            --bg-color: #2c3e50; --primary-color: #34495e; --secondary-color: #2980b9;
-            --font-color: #ecf0f1; --border-color: #2980b9; --success-color: #27ae60;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg-color); color: var(--font-color); line-height: 1.6; }
-        .container { max-width: 800px; margin: auto; padding: 20px; }
-        header { background: var(--primary-color); padding: 1rem; margin-bottom: 20px; border-radius: 8px; }
-        header h1 { text-align: center; color: var(--font-color); font-size: 1.5rem; }
-        header a { color: var(--font-color); text-decoration: none; float: left; transition: transform 0.2s; }
-        header a:hover { transform: scale(1.1); }
-        .card { background: var(--primary-color); border: 1px solid var(--border-color); border-radius: 8px; padding: 25px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
-        .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input { width: 100%; padding: 12px; border-radius: 5px; border: 1px solid var(--border-color); background-color: var(--bg-color); color: var(--font-color); font-size: 1rem; }
-        button { width: 100%; padding: 12px; border-radius: 5px; border: none; cursor: pointer; transition: background-color 0.3s; font-weight: bold; font-size: 1.1rem; background-color: var(--success-color); color: var(--font-color); margin-top: 10px; }
-        button:hover { opacity: 0.9; }
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--danger:#ff6b6b;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:20px}
+        .container{max-width:700px;margin:auto}
+        header{background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:20px;border-radius:12px;display:flex;align-items:center;gap:15px}
+        header a{color:var(--text);text-decoration:none;font-size:1.5rem;transition:transform .2s}
+        header a:hover{transform:scale(1.1)}
+        header h1{font-size:1.3rem}
+        .card{background:var(--card);border-radius:12px;padding:25px;box-shadow:0 4px 20px rgba(0,0,0,.3)}
+        .section{margin-bottom:25px;padding-bottom:20px;border-bottom:1px solid var(--border)}
+        .section:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+        .section h3{color:var(--accent);margin-bottom:15px;font-size:1rem;display:flex;align-items:center;gap:8px}
+        .form-group{margin-bottom:15px}
+        label{display:block;margin-bottom:5px;font-size:0.9rem;color:var(--dim)}
+        input{width:100%;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:1rem;transition:border-color .2s}
+        input:focus{outline:none;border-color:var(--accent)}
+        button{width:100%;padding:14px;border-radius:8px;border:none;cursor:pointer;font-weight:600;font-size:1.1rem;background:var(--success);color:#fff;transition:all .2s;margin-top:10px}
+        button:hover{opacity:0.9;transform:translateY(-1px)}
+        button:active{transform:translateY(0)}
+        .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999;animation:slideIn .3s;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+        .toast.success{background:var(--success)}
+        .toast.error{background:var(--danger)}
+        @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+        @media(max-width:600px){.container{padding:10px}header{flex-direction:column;text-align:center}}
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1><a href="/">← Back</a> | Device Settings</h1>
+            <a href="/">← Back</a>
+            <h1>Device Settings</h1>
         </header>
         <div class="card">
             <form id="settingsForm">
-                <div class="form-group"><label for="ssid">WiFi SSID:</label><input type="text" id="ssid" name="ssid"></div>
-                <div class="form-group"><label for="password">WiFi Password:</label><input type="password" id="password" name="password"></div>
-                <div class="form-group"><label for="openai_api_key">API Key:</label><input type="password" id="openai_api_key" name="openai_api_key"></div>
-                <div class="form-group"><label for="model">AI Model:</label><input type="text" id="model" name="model"></div>
-                <div class="form-group"><label for="max_completion_tokens">Max Tokens:</label><input type="number" id="max_completion_tokens" name="max_completion_tokens"></div>
-                <div class="form-group"><label for="temperature">Temperature:</label><input type="number" step="0.01" id="temperature" name="temperature"></div>
-                <div class="form-group"><label for="top_p">Top P:</label><input type="number" step="0.01" id="top_p" name="top_p"></div>
-                <div class="form-group"><label for="frequency_penalty">Frequency Penalty:</label><input type="number" step="0.01" id="frequency_penalty" name="frequency_penalty"></div>
-                <div class="form-group"><label for="presence_penalty">Presence Penalty:</label><input type="number" step="0.01" id="presence_penalty" name="presence_penalty"></div>
-                <div class="form-group"><label for="typing_delay">Typing Delay (ms):</label><input type="number" id="typing_delay" name="typing_delay"></div>
-                <div class="form-group"><label for="command_delay">Duck Command Delay (ms):</label><input type="number" id="command_delay" name="command_delay"></div>
-                <div class="form-group"><label for="add_more_delay">More Delay (ms):</label><input type="number" step="5" id="add_more_delay" name="add_more_delay"></div>
-                <button type="button" onclick="saveSettings()">Save Settings</button>
+                <div class="section">
+                    <h3>🔐 Authentication</h3>
+                    <div class="form-group"><label for="auth_username">Username</label><input type="text" id="auth_username" name="auth_username" autocomplete="username"></div>
+                    <div class="form-group"><label for="auth_password">Password</label><input type="password" id="auth_password" name="auth_password" autocomplete="new-password"></div>
+                </div>
+                <div class="section">
+                    <h3>📶 WiFi Configuration</h3>
+                    <div class="form-group"><label for="ssid">WiFi SSID</label><input type="text" id="ssid" name="ssid"></div>
+                    <div class="form-group"><label for="password">WiFi Password</label><input type="password" id="password" name="password"></div>
+                </div>
+                <div class="section">
+                    <h3>🤖 AI Configuration</h3>
+                    <div class="form-group"><label for="openai_api_key">OpenAI API Key</label><input type="password" id="openai_api_key" name="openai_api_key"></div>
+                    <div class="form-group"><label for="model">AI Model</label><input type="text" id="model" name="model"></div>
+                    <div class="form-group"><label for="max_completion_tokens">Max Tokens</label><input type="number" id="max_completion_tokens" name="max_completion_tokens"></div>
+                    <div class="form-group"><label for="temperature">Temperature (0.0 - 2.0)</label><input type="number" step="0.01" min="0" max="2" id="temperature" name="temperature"></div>
+                </div>
+                <div class="section">
+                    <h3>⌨️ Keyboard Settings</h3>
+                    <div class="form-group"><label for="typing_delay">Typing Delay (ms)</label><input type="number" id="typing_delay" name="typing_delay" min="0" max="1000"></div>
+                    <div class="form-group"><label for="command_delay">Command Delay (ms)</label><input type="number" id="command_delay" name="command_delay" min="0" max="1000"></div>
+                    <div class="form-group"><label for="add_more_delay">Additional Delay (ms)</label><input type="number" step="5" id="add_more_delay" name="add_more_delay" min="0"></div>
+                </div>
+                <button type="button" onclick="saveSettings()">💾 Save Settings</button>
             </form>
         </div>
     </div>
     <script>
-        function loadSettings() {
-            fetch('/settings').then(r => r.json()).then(data => {
-                for (const key in data) {
-                    if (document.getElementById(key)) document.getElementById(key).value = data[key];
-                }
-            });
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
         }
+
+        function loadSettings() {
+            fetch('/settings')
+                .then(r => r.json())
+                .then(data => {
+                    for (const key in data) {
+                        const el = document.getElementById(key);
+                        if (el) el.value = data[key];
+                    }
+                })
+                .catch(e => showToast("Failed to load settings", "error"));
+        }
+
         function saveSettings() {
             const form = document.getElementById('settingsForm');
             const formData = new FormData(form);
             const data = Object.fromEntries(formData.entries());
+            
             fetch('/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data),
-            }).then(r => r.text()).then(result => alert(result));
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast("Settings saved successfully!");
+                } else {
+                    showToast("Failed to save settings", "error");
+                }
+            })
+            .catch(e => showToast("Error: " + e, "error"));
         }
+
         window.onload = loadSettings;
     </script>
 </body>
@@ -507,84 +732,87 @@ void handleSettingsPage() {
 )rawliteral";
     server.send(200, "text/html", html);
 }
- 
 
 
-
+// ============================================================================
+// File Manager Page
+// ============================================================================
 void handleFileManagerPage() {
-    logRequest(server); // Add logging
-  String html = R"rawliteral(
+    if (!checkAuth()) return;
+    logRequest(server);
+    
+    String html = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 File Manager</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>">
     <style>
-        :root {
-            --bg-color: #2c3e50; --primary-color: #34495e; --secondary-color: #2980b9;
-            --font-color: #ecf0f1; --border-color: #2980b9; --danger-color: #c0392b;
-            --success-color: #27ae60;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg-color); color: var(--font-color); }
-        .container { max-width: 1000px; margin: auto; padding: 20px; }
-        header { background: var(--primary-color); padding: 1rem; margin-bottom: 20px; border-radius: 8px; }
-        header h1 { text-align: center; font-size: 1.5rem; }
-        header a { color: var(--font-color); text-decoration: none; float: left; transition: transform 0.2s; }
-        header a:hover { transform: scale(1.1); }
-        .card { background: var(--primary-color); border-radius: 8px; padding: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
-        #currentPath { padding: 10px; background-color: var(--bg-color); border-radius: 5px; margin-bottom: 15px; font-family: monospace; word-break: break-all; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--secondary-color); }
-        th { background-color: var(--secondary-color); }
-        tr:hover { background-color: #3f5870; }
-        td a { color: var(--font-color); text-decoration: none; font-weight: bold; cursor: pointer; }
-        td a:hover { text-decoration: underline; }
-        .action-btn { color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; }
-        .action-btn.danger { background-color: var(--danger-color); }
-        .action-btn.success { background-color: var(--success-color); }
-        .action-btn:hover { opacity: 0.8; }
-        .file-icon { margin-right: 10px; }
-        
-        .create-item-container { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
-        .create-item-container input { flex-grow: 1; margin: 0; padding: 10px; background-color: var(--bg-color); color: var(--font-color); border: 1px solid var(--border-color); border-radius: 5px; }
-        .button-group { display: flex; gap: 10px; }
-        
-        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.7); }
-        .modal-content { background-color: var(--primary-color); margin: 5% auto; padding: 20px; border: 1px solid var(--border-color); border-radius: 8px; width: 80%; max-width: 900px; }
-        .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--secondary-color); padding-bottom: 10px; margin-bottom: 15px; }
-        .close-btn { color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; }
-        .close-btn:hover, .close-btn:focus { color: white; }
-        #fileContent { background-color: var(--bg-color); color: var(--font-color); white-space: pre-wrap; word-wrap: break-word; max-height: 60vh; overflow-y: auto; padding: 15px; border-radius: 5px; font-family: 'Courier New', Courier, monospace; }
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--danger:#ff6b6b;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);padding:20px}
+        .container{max-width:1000px;margin:auto}
+        header{background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:20px;border-radius:12px;display:flex;align-items:center;gap:15px}
+        header a{color:var(--text);text-decoration:none;font-size:1.5rem;transition:transform .2s}
+        header a:hover{transform:scale(1.1)}
+        header h1{font-size:1.3rem}
+        .card{background:var(--card);border-radius:12px;padding:20px;box-shadow:0 4px 20px rgba(0,0,0,.3)}
+        .toolbar{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap}
+        .toolbar input{flex:1;min-width:200px;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)}
+        .toolbar input:focus{outline:none;border-color:var(--accent)}
+        .toolbar button{padding:12px 20px;border-radius:8px;border:none;cursor:pointer;font-weight:600;background:var(--success);color:#fff;transition:all .2s}
+        .toolbar button:hover{opacity:0.9;transform:translateY(-1px)}
+        #currentPath{padding:12px;background:var(--bg);border-radius:8px;margin-bottom:15px;font-family:'Fira Code',monospace;word-break:break-all;font-size:0.9rem;border-left:3px solid var(--accent)}
+        table{width:100%;border-collapse:collapse}
+        th,td{padding:12px;text-align:left;border-bottom:1px solid var(--border)}
+        th{background:var(--secondary);font-weight:600}
+        tr:hover{background:rgba(255,255,255,0.03)}
+        td a{color:var(--text);text-decoration:none;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:8px}
+        td a:hover{color:var(--accent)}
+        .file-icon{font-size:1.2rem}
+        .action-btn{color:#fff;border:none;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600;font-size:0.85rem;transition:all .2s}
+        .action-btn.danger{background:var(--danger)}
+        .action-btn:hover{opacity:0.9;transform:translateY(-1px)}
+        .modal{display:none;position:fixed;z-index:1000;left:0;top:0;width:100%;height:100%;overflow:auto;background-color:rgba(0,0,0,0.8)}
+        .modal-content{background:var(--card);margin:5% auto;padding:20px;border-radius:12px;width:90%;max-width:900px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 4px 30px rgba(0,0,0,.5)}
+        .modal-header{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid var(--accent);padding-bottom:15px;margin-bottom:15px}
+        .modal-header h2{font-size:1.1rem;display:flex;align-items:center;gap:8px}
+        .close-btn{color:var(--dim);font-size:1.8rem;font-weight:bold;cursor:pointer;transition:color .2s}
+        .close-btn:hover{color:var(--text)}
+        #fileContent{background:var(--bg);color:var(--text);white-space:pre-wrap;word-wrap:break-word;overflow-y:auto;padding:15px;border-radius:8px;font-family:'Fira Code','Courier New',monospace;font-size:0.9rem;flex:1}
+        .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999;animation:slideIn .3s;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+        .toast.success{background:var(--success)}
+        .toast.error{background:var(--danger)}
+        @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+        @media(max-width:600px){.toolbar{flex-direction:column}.toolbar input,.toolbar button{width:100%}th:nth-child(2),td:nth-child(2){display:none}}
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1><a href="/">← Back</a> | SD Card File Manager</h1>
+            <a href="/">← Back</a>
+            <h1>SD Card File Manager</h1>
         </header>
         <div class="card">
-            <!-- NEW UI ELEMENTS FOR CREATING ITEMS -->
-            <div class="create-item-container">
+            <div class="toolbar">
                 <input type="text" id="newItemName" placeholder="New file or directory name...">
-                <div class="button-group">
-                    <button class="action-btn success" onclick="createItem('file')">Create File</button>
-                    <button class="action-btn success" onclick="createItem('dir')">Create Dir</button>
-                </div>
+                <button onclick="createItem('file')">📄 Create File</button>
+                <button onclick="createItem('dir')">📁 Create Dir</button>
             </div>
-            
-            <div id="currentPath">/</div>
+            <div id="currentPath">📂 /</div>
             <table>
                 <thead><tr><th>Name</th><th>Size</th><th>Actions</th></tr></thead>
                 <tbody id="fileList"></tbody>
             </table>
         </div>
     </div>
+    
     <div id="fileModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h2 id="modalFileName"></h2>
+                <h2>📄 <span id="modalFileName"></span></h2>
                 <span class="close-btn" onclick="closeModal()">×</span>
             </div>
             <pre id="fileContent"></pre>
@@ -595,39 +823,52 @@ void handleFileManagerPage() {
         let currentPath = '/';
         const modal = document.getElementById('fileModal');
 
-        function formatBytes(bytes, d = 2) {
-            if (!+bytes) return '0 Bytes';
-            const k = 1024, sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+        }
+
+        function formatBytes(bytes, decimals = 1) {
+            if (!+bytes) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return `${parseFloat((bytes/Math.pow(k,i)).toFixed(d))} ${sizes[i]}`;
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i];
         }
 
         function renderFileList(files) {
             const fileListBody = document.getElementById('fileList');
             let content = '';
+            
             if (currentPath !== '/') {
                 let upPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
-                content += `<tr><td><a onclick="fetchFiles('${upPath}')"><span class="file-icon">📁</span>..</a></td><td></td><td></td></tr>`;
+                content += '<tr><td><a onclick="fetchFiles(\'' + upPath + '\')"><span class="file-icon">📁</span> ..</a></td><td></td><td></td></tr>';
             }
-            files.sort((a,b) => (a.type === b.type) ? a.name.localeCompare(b.name) : (a.type === 'dir' ? -1 : 1))
-                 .forEach(f => {
+            
+            files.sort((a, b) => (a.type === b.type) ? a.name.localeCompare(b.name) : (a.type === 'dir' ? -1 : 1))
+                .forEach(f => {
                     const icon = f.type === 'dir' ? '📁' : '📄';
                     const path = (currentPath === '/' ? '' : currentPath) + '/' + f.name;
-                    content += `<tr>
-                        <td><a onclick="${f.type === 'dir' ? `fetchFiles('${path}')` : `viewFile('${path}')`}"><span class="file-icon">${icon}</span>${f.name}</a></td>
-                        <td>${f.type === 'file' ? formatBytes(f.size) : ''}</td>
-                        <td><button class="action-btn danger" onclick="deleteItem('${path}')">Delete</button></td></tr>`;
+                    const onclick = f.type === 'dir' ? "fetchFiles('" + path + "')" : "viewFile('" + path + "')";
+                    content += '<tr>';
+                    content += '<td><a onclick="' + onclick + '"><span class="file-icon">' + icon + '</span> ' + f.name + '</a></td>';
+                    content += '<td>' + (f.type === 'file' ? formatBytes(f.size) : '—') + '</td>';
+                    content += '<td><button class="action-btn danger" onclick="deleteItem(\'' + path + '\')">Delete</button></td>';
+                    content += '</tr>';
                 });
             fileListBody.innerHTML = content;
         }
 
         function fetchFiles(path) {
             currentPath = path;
-            document.getElementById('currentPath').textContent = 'Current Path: ' + path;
+            document.getElementById('currentPath').textContent = '📂 ' + path;
             fetch('/files?path=' + encodeURIComponent(path))
                 .then(r => r.ok ? r.json() : Promise.reject('Network error'))
                 .then(data => renderFileList(data))
-                .catch(e => alert('Error fetching file list: ' + e.message));
+                .catch(e => showToast('Error fetching file list: ' + e, 'error'));
         }
 
         function viewFile(path) {
@@ -638,19 +879,18 @@ void handleFileManagerPage() {
                     document.getElementById('fileContent').textContent = text;
                     modal.style.display = 'block';
                 })
-                .catch(e => alert('Error viewing file: ' + e.message));
+                .catch(e => showToast('Error viewing file: ' + e, 'error'));
         }
         
-        // NEW JAVASCRIPT FUNCTION
         function createItem(type) {
             const nameInput = document.getElementById('newItemName');
             const newItemName = nameInput.value.trim();
             if (!newItemName) {
-                alert('Please enter a name.');
+                showToast('Please enter a name', 'error');
                 return;
             }
             if (/[~#%&*:<>?\/\\{|}"]/.test(newItemName)) {
-                alert('Name contains invalid characters.');
+                showToast('Name contains invalid characters', 'error');
                 return;
             }
 
@@ -662,23 +902,35 @@ void handleFileManagerPage() {
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
                 body: 'path=' + encodeURIComponent(path)
             })
-            .then(response => response.text().then(text => {
-                if (!response.ok) return Promise.reject(text);
-                return text;
-            }))
-            .then(result => {
-                alert(result);
-                nameInput.value = ''; // Clear input field
-                fetchFiles(currentPath); // Refresh the view
+            .then(response => {
+                if (response.ok) {
+                    showToast((type === 'file' ? 'File' : 'Directory') + ' created successfully');
+                    nameInput.value = '';
+                    fetchFiles(currentPath);
+                } else {
+                    return response.text().then(text => { throw new Error(text); });
+                }
             })
-            .catch(error => alert('Error: ' + error));
+            .catch(error => showToast('Error: ' + error.message, 'error'));
         }
 
         function deleteItem(path) {
-            if (!confirm('Are you sure you want to delete ' + path + '? This cannot be undone.')) return;
-            fetch('/delete_file', { method: 'POST', body: 'path=' + encodeURIComponent(path), headers: {'Content-Type': 'application/x-www-form-urlencoded'} })
-                .then(r => r.text()).then(result => { alert(result); fetchFiles(currentPath); })
-                .catch(e => alert('Error deleting item: ' + e.message));
+            if (!confirm('Are you sure you want to delete "' + path + '"?\nThis cannot be undone.')) return;
+            
+            fetch('/delete_file', { 
+                method: 'POST', 
+                body: 'path=' + encodeURIComponent(path), 
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'} 
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast('Item deleted successfully');
+                    fetchFiles(currentPath);
+                } else {
+                    showToast('Failed to delete item', 'error');
+                }
+            })
+            .catch(e => showToast('Error: ' + e, 'error'));
         }
 
         function closeModal() { modal.style.display = 'none'; }
@@ -688,120 +940,247 @@ void handleFileManagerPage() {
 </body>
 </html>
 )rawliteral";
-  server.send(200, "text/html", html);
+    server.send(200, "text/html", html);
 }
 
 
-
-
-
-
-
+// ============================================================================
+// Ducky Script Studio Page
+// ============================================================================
 void handleDuckyPage() {
+    if (!checkAuth()) return;
     logRequest(server);
+    
     String html = R"WEBUI(
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ducky Script Editor</title>
+    <title>Ducky Script Studio</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦆</text></svg>">
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.34.0/min/vs/loader.js"></script>
     <style>
-        :root{--bg-color:#2c3e50;--primary-color:#34495e;--secondary-color:#2980b9;--font-color:#ecf0f1;--border-color:#2980b9;--success-color:#27ae60;--danger-color:#c0392b;}
-        
-        html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
-        body{font-family:-apple-system,sans-serif;background-color:var(--bg-color);color:var(--font-color);}
-
-        .page-wrapper { display: flex; flex-direction: column; height: 100vh; padding: 20px; box-sizing: border-box; }
-        header { flex-shrink: 0; background:var(--primary-color); padding:1rem; margin-bottom:20px; border-radius:8px; text-align:center; }
-        
-        .content-container { display: flex; gap: 20px; flex-grow: 1; min-height: 0; }
-
-        .toolbar{flex:0 0 250px;background:var(--primary-color);padding:15px;border-radius:8px;overflow-y:auto;}
-        .main-content{flex-grow:1;display:flex;flex-direction:column; min-width: 0;}
-        
-        #editor-container{width:100%;flex-grow:1;border:1px solid var(--border-color);border-radius:5px;}
-        .button,button,input[type=file]::file-selector-button{background-color:var(--secondary-color);color:var(--font-color);border:none;border-radius:5px;padding:10px;margin-bottom:10px;width:100%;text-align:center;cursor:pointer;font-size:1rem;font-weight:bold;transition:opacity .2s;}
-        .button:hover,button:hover{opacity:.9;}
-        .button-group{display:flex;gap:10px;margin-top:10px;}
-        input,select{width:100%;padding:10px;margin-bottom:10px;border-radius:5px;border:1px solid var(--border-color);background-color:var(--bg-color);color:var(--font-color);}
-        h2,h3{border-bottom:2px solid var(--secondary-color);padding-bottom:10px;margin-top:0;margin-bottom:15px;}
-
-        /* THE CSS FIX IS HERE */
-        .action-bar {
-            flex-shrink: 0; /* This is the critical rule: it prevents the bar from shrinking */
-            padding-top: 10px;
-        }
-
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--danger:#ff6b6b;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
+        *{box-sizing:border-box;margin:0;padding:0}
+        html,body{height:100%;margin:0;padding:0;overflow:hidden}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
+        .page-wrapper{display:flex;flex-direction:column;height:100vh;padding:15px}
+        header{flex-shrink:0;background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:15px;border-radius:12px;display:flex;align-items:center;gap:15px}
+        header a{color:var(--text);text-decoration:none;font-size:1.5rem;transition:transform .2s}
+        header a:hover{transform:scale(1.1)}
+        header h1{font-size:1.3rem}
+        .content-container{display:flex;gap:15px;flex-grow:1;min-height:0}
+        .toolbar{flex:0 0 220px;background:var(--card);padding:15px;border-radius:12px;overflow-y:auto}
+        .toolbar h3{color:var(--accent);margin-bottom:15px;font-size:1rem;border-bottom:2px solid var(--accent);padding-bottom:10px}
+        .main-content{flex-grow:1;display:flex;flex-direction:column;min-width:0}
+        .main-content h2{margin-bottom:10px;font-size:1.1rem;color:var(--accent)}
+        #editor-container{width:100%;flex-grow:1;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+        .cmd-btn{background:var(--secondary);color:var(--text);border:none;border-radius:8px;padding:10px 12px;margin-bottom:8px;width:100%;text-align:left;cursor:pointer;font-size:0.9rem;font-weight:500;transition:all .2s}
+        .cmd-btn:hover{background:var(--accent);transform:translateX(3px)}
+        .action-bar{flex-shrink:0;padding-top:15px}
+        .btn-row{display:flex;gap:10px;margin-bottom:10px}
+        .btn-row select,.btn-row input{flex:1;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.95rem}
+        .btn-row select:focus,.btn-row input:focus{outline:none;border-color:var(--accent)}
+        .btn-row button,.btn-row label{padding:12px 18px;border-radius:8px;border:none;cursor:pointer;font-size:0.95rem;font-weight:600;background:var(--secondary);color:var(--text);text-align:center;transition:all .2s;white-space:nowrap}
+        .btn-row button:hover,.btn-row label:hover{background:var(--accent);transform:translateY(-1px)}
+        .btn-row button.danger{background:var(--danger)}
+        .btn-row button.success{background:var(--success)}
+        .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999;animation:slideIn .3s;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+        .toast.success{background:var(--success)}
+        .toast.error{background:var(--danger)}
+        .toast.info{background:var(--secondary)}
+        @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+        @media(max-width:768px){.content-container{flex-direction:column}.toolbar{flex:0 0 auto;max-height:150px}.btn-row{flex-wrap:wrap}.btn-row select,.btn-row input,.btn-row button,.btn-row label{min-width:calc(50% - 5px)}}
     </style>
 </head>
 <body>
     <div class="page-wrapper">
-        <header><h1><a href="/" style="color:var(--font-color);text-decoration:none;">← Main Menu</a> | Ducky Script Studio</h1></header>
+        <header>
+            <a href="/">← Back</a>
+            <h1>🦆 Ducky Script Studio</h1>
+        </header>
         
         <div class="content-container">
             <div class="toolbar">
                 <h3>Command Palette</h3>
-                <div class="button" onclick="insertCommand('REM ')">REM (Comment)</div>
-                <div class="button" onclick="insertCommand('DELAY ')">DELAY</div>
-                <div class="button" onclick="insertCommand('STRING ')">STRING</div>
-                <div class="button" onclick="insertCommand('ENTER')">ENTER</div>
-                <div class="button" onclick="insertCommand('GUI r')">GUI r (Run)</div>
-                <div class="button" onclick="insertCommand('GUI ')">GUI (Windows Key)</div>
-                <div class="button" onclick="insertCommand('CTRL ')">CTRL</div>
-                <div class="button" onclick="insertCommand('ALT ')">ALT</div>
-                <div class="button" onclick="insertCommand('SHIFT ')">SHIFT</div>
-                <div class="button" onclick="insertCommand('CTRL-ALT ')">CTRL-ALT</div>
-                <div class="button" onclick="insertCommand('CTRL-SHIFT ')">CTRL-SHIFT</div>
-                <div class="button" onclick="insertCommand('DELETE')">DELETE</div>
-                <div class="button" onclick="insertCommand('UP')">UPARROW</div>
-                <div class="button" onclick="insertCommand('DOWN')">DOWNARROW</div>
+                <button class="cmd-btn" onclick="insertCommand('REM ')">💬 REM (Comment)</button>
+                <button class="cmd-btn" onclick="insertCommand('DELAY ')">⏱️ DELAY</button>
+                <button class="cmd-btn" onclick="insertCommand('STRING ')">📝 STRING</button>
+                <button class="cmd-btn" onclick="insertCommand('ENTER\n')">↵ ENTER</button>
+                <button class="cmd-btn" onclick="insertCommand('GUI r\n')">🪟 GUI r (Run)</button>
+                <button class="cmd-btn" onclick="insertCommand('GUI ')">🪟 GUI (Win Key)</button>
+                <button class="cmd-btn" onclick="insertCommand('CTRL ')">⌃ CTRL</button>
+                <button class="cmd-btn" onclick="insertCommand('ALT ')">⌥ ALT</button>
+                <button class="cmd-btn" onclick="insertCommand('SHIFT ')">⇧ SHIFT</button>
+                <button class="cmd-btn" onclick="insertCommand('CTRL-ALT ')">⌃⌥ CTRL-ALT</button>
+                <button class="cmd-btn" onclick="insertCommand('CTRL-SHIFT ')">⌃⇧ CTRL-SHIFT</button>
+                <button class="cmd-btn" onclick="insertCommand('TAB\n')">⇥ TAB</button>
+                <button class="cmd-btn" onclick="insertCommand('ESCAPE\n')">⎋ ESCAPE</button>
+                <button class="cmd-btn" onclick="insertCommand('DELETE\n')">⌫ DELETE</button>
+                <button class="cmd-btn" onclick="insertCommand('UP\n')">↑ UP ARROW</button>
+                <button class="cmd-btn" onclick="insertCommand('DOWN\n')">↓ DOWN ARROW</button>
+                <button class="cmd-btn" onclick="insertCommand('DEFAULT_DELAY ')">🔄 DEFAULT_DELAY</button>
             </div>
+            
             <div class="main-content">
-                <h2>Editor</h2>
+                <h2>Script Editor</h2>
                 <div id="editor-container"></div>
-
-                <!-- THE HTML FIX IS HERE: Wrapping the buttons in an action-bar div -->
+                
                 <div class="action-bar">
-                    <div class="button-group">
-                        <select id="scriptList" onchange="loadDuckyScript()"><option value="">Load Saved Script</option></select>
+                    <div class="btn-row">
+                        <select id="scriptList" onchange="loadDuckyScript()">
+                            <option value="">Load Saved Script...</option>
+                        </select>
                         <input type="text" id="scriptName" placeholder="Script name to save...">
-                        <button class="success" onclick="saveDuckyScript()">Save</button>
+                        <button class="success" onclick="saveDuckyScript()">💾 Save</button>
                     </div>
-                     <div class="button-group">
-                        <label for="importFile" class="button">Import from .txt</label>
+                    <div class="btn-row">
+                        <label for="importFile">📂 Import .txt</label>
                         <input type="file" id="importFile" onchange="importDuckyScript()" style="display:none;" accept=".txt">
-                        <button class="danger" onclick="executeDucky()">Execute on Target</button>
+                        <button class="danger" onclick="executeDucky()">▶️ Execute on Target</button>
                     </div>
                 </div>
-
             </div>
         </div>
     </div>
 
     <script>
-        // The JavaScript does not need to change.
         var duckyEditor;
+        
         require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.34.0/min/vs' }});
         require(['vs/editor/editor.main'], function() {
+            // Register Ducky Script language
             monaco.languages.register({ id: 'ducky' });
             monaco.languages.setMonarchTokensProvider('ducky', {
-                tokenizer: { root: [ [/REM.*/,'comment'],[/\b(STRING|DELAY|ENTER|GUI|WINDOWS|CTRL|ALT|SHIFT|UP|DOWN|LEFT|RIGHT|DELETE|TAB|ESCAPE)\b/,'keyword'],[/\d+/,'number'], ] }
+                tokenizer: {
+                    root: [
+                        [/REM.*/, 'comment'],
+                        [/\b(STRING|DELAY|ENTER|GUI|WINDOWS|CTRL|ALT|SHIFT|UP|DOWN|LEFT|RIGHT|DELETE|TAB|ESCAPE|BACKSPACE|SPACE|CAPSLOCK|F[1-9]|F1[0-2]|DEFAULT_DELAY|DEFAULTDELAY|REPEAT)\b/, 'keyword'],
+                        [/\d+/, 'number'],
+                    ]
+                }
             });
+            
             duckyEditor = monaco.editor.create(document.getElementById('editor-container'), {
-                value: 'REM Ducky Script Editor\nDELAY 1000\nGUI r\nDELAY 500\nSTRING powershell\nENTER',
+                value: 'REM Ducky Script Editor\nREM Enter your commands below\n\nDELAY 1000\nGUI r\nDELAY 500\nSTRING notepad\nENTER\nDELAY 1000\nSTRING Hello from ESP32!',
                 language: 'ducky',
                 theme: 'vs-dark',
-                automaticLayout: true
+                automaticLayout: true,
+                minimap: { enabled: false },
+                fontSize: 14,
+                scrollBeyondLastLine: false
             });
         });
-        function insertCommand(command) { var position = duckyEditor.getPosition(); duckyEditor.executeEdits('my-source', [{ range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column), text: command + (command.endsWith(' ') ? '' : '\n') }]); duckyEditor.focus(); }
-        function importDuckyScript() { const fileInput = document.getElementById('importFile'); if (fileInput.files.length === 0) return; const file = fileInput.files[0]; const reader = new FileReader(); reader.onload = (e) => duckyEditor.setValue(e.target.result); reader.readAsText(file); document.getElementById('scriptName').value = file.name.replace(/\.[^/.]+$/, ""); }
-        function executeDucky() { const scriptContent = duckyEditor.getValue(); if (!scriptContent) { alert("Script is empty!"); return; } fetch('/execute_ducky', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: scriptContent }).then(r => r.text()).then(alert); }
-        function saveDuckyScript() { const scriptName = document.getElementById('scriptName').value; const scriptContent = duckyEditor.getValue(); if (!scriptName) { alert("Please enter a name to save the script."); return; } fetch('/save_script', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `path=/ducky_scripts/${scriptName}.txt&content=${encodeURIComponent(scriptContent)}` }).then(r => r.text()).then(alert).then(() => loadDuckyScriptList()); }
-        function loadDuckyScript() { const scriptName = document.getElementById('scriptList').value; if (!scriptName) return; document.getElementById('scriptName').value = scriptName; fetch(`/files?path=/ducky_scripts/${scriptName}.txt`).then(r => r.ok ? r.text() : Promise.reject('File not found')).then(content => duckyEditor.setValue(content)).catch(alert); }
-        function loadDuckyScriptList() { fetch('/files?path=/ducky_scripts').then(r => r.ok ? r.json() : Promise.resolve([])).then(files => { const list = document.getElementById('scriptList'); list.innerHTML = "<option value=''>Load Saved Script</option>"; files.forEach(file => { if (file.name.endsWith('.txt')) { const scriptName = file.name.replace('.txt', ''); list.innerHTML += `<option value="${scriptName}">${scriptName}</option>`; } }); }); }
+
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+        }
+
+        function insertCommand(command) {
+            var position = duckyEditor.getPosition();
+            duckyEditor.executeEdits('my-source', [{
+                range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+                text: command
+            }]);
+            duckyEditor.focus();
+        }
+
+        function importDuckyScript() {
+            const fileInput = document.getElementById('importFile');
+            if (fileInput.files.length === 0) return;
+            
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                duckyEditor.setValue(e.target.result);
+                showToast('Script imported: ' + file.name);
+            };
+            reader.readAsText(file);
+            document.getElementById('scriptName').value = file.name.replace(/\.[^/.]+$/, "");
+        }
+
+        function executeDucky() {
+            const scriptContent = duckyEditor.getValue();
+            if (!scriptContent.trim()) {
+                showToast("Script is empty!", "error");
+                return;
+            }
+            
+            showToast("Executing script...", "info");
+            fetch('/execute_ducky', {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain' },
+                body: scriptContent
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast("Ducky Script execution initiated");
+                } else {
+                    showToast("Execution failed", "error");
+                }
+            })
+            .catch(e => showToast("Error: " + e, "error"));
+        }
+
+        function saveDuckyScript() {
+            const scriptName = document.getElementById('scriptName').value.trim();
+            const scriptContent = duckyEditor.getValue();
+            
+            if (!scriptName) {
+                showToast("Please enter a name to save the script", "error");
+                return;
+            }
+            
+            fetch('/save_script', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'path=/ducky_scripts/' + encodeURIComponent(scriptName) + '.txt&content=' + encodeURIComponent(scriptContent)
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast("Script saved successfully");
+                    loadDuckyScriptList();
+                } else {
+                    showToast("Failed to save script", "error");
+                }
+            })
+            .catch(e => showToast("Error: " + e, "error"));
+        }
+
+        function loadDuckyScript() {
+            const scriptName = document.getElementById('scriptList').value;
+            if (!scriptName) return;
+            
+            document.getElementById('scriptName').value = scriptName;
+            fetch('/files?path=/ducky_scripts/' + encodeURIComponent(scriptName) + '.txt')
+                .then(r => r.ok ? r.text() : Promise.reject('File not found'))
+                .then(content => {
+                    duckyEditor.setValue(content);
+                    showToast("Script loaded: " + scriptName);
+                })
+                .catch(e => showToast("Error loading script: " + e, "error"));
+        }
+
+        function loadDuckyScriptList() {
+            fetch('/files?path=/ducky_scripts')
+                .then(r => r.ok ? r.json() : Promise.resolve([]))
+                .then(files => {
+                    const list = document.getElementById('scriptList');
+                    list.innerHTML = "<option value=''>Load Saved Script...</option>";
+                    files.forEach(file => {
+                        if (file.name.endsWith('.txt')) {
+                            const scriptName = file.name.replace('.txt', '');
+                            list.innerHTML += '<option value="' + scriptName + '">' + scriptName + '</option>';
+                        }
+                    });
+                });
+        }
+
         window.onload = loadDuckyScriptList;
     </script>
 </body>
@@ -811,6 +1190,9 @@ void handleDuckyPage() {
 }
 
 
+
+
+ 
 
  
 // ============================================================================
