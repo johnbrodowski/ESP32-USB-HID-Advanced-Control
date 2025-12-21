@@ -56,7 +56,6 @@ struct Settings {
     String ssid = "";                    // Configure in settings.json
     String password = "";                // Configure in settings.json
     String openai_api_key = "";          // Configure in settings.json
-    String model = "gpt-4o";
     String auth_username = "admin";      // Change this!
     String auth_password = "changeme";   // Change this!
     int max_completion_tokens = 1000;
@@ -89,14 +88,14 @@ bool checkAuth();
 bool isValidPath(const String& path);
 
 // HTTP Handlers
-void handleRoot(); // <<
+void handleRoot();
 void handleLogin();
 void handleLogout();
 void handleNotFoundRouter();
-void handleSettingsPage(); // <<
+void handleSettingsPage();
 void handleSettings();
-void handleFileManagerPage(); // <<
-void handleDuckyPage(); // <<
+void handleFileManagerPage();
+void handleDuckyPage();
 void handleStatus();
 void handleFeedback();
 void handleEvents();
@@ -232,6 +231,12 @@ bool checkAuth() {
     return true;
 }
 
+ 
+
+
+
+
+
 void handleLogin() {
     if (server.hasArg("username") && server.hasArg("password")) {
         if (server.arg("username") == settings.auth_username && 
@@ -266,6 +271,421 @@ void handleLogout() {
     server.sendHeader("Location", "/login");
     server.send(302, "text/plain", "Logged out");
 }
+
+// ============================================================================
+// Path Validation (Security)
+// ============================================================================
+bool isValidPath(const String& path) {
+    if (path.indexOf("..") != -1) return false;
+    if (path.indexOf("//") != -1) return false;
+    if (!path.startsWith("/")) return false;
+    for (int i = 0; i < path.length(); i++) {
+        if (path.charAt(i) == '\0') return false;
+    }
+    return true;
+}
+
+// ============================================================================
+// Web Server Setup
+// ============================================================================
+void startWebServer() {
+    // Public endpoint
+    server.on("/login", HTTP_GET, handleLogin);
+    server.on("/login", HTTP_POST, handleLogin);
+    server.on("/logout", handleLogout);
+    
+    // Protected endpoints
+    server.on("/", handleRoot);
+    server.on("/settings_page", HTTP_GET, handleSettingsPage);
+    server.on("/file_manager", HTTP_GET, handleFileManagerPage);
+    server.on("/ducky", HTTP_GET, handleDuckyPage);
+    
+    server.on("/status", HTTP_GET, handleStatus);
+    server.on("/feedback", HTTP_POST, handleFeedback);
+    server.on("/events", HTTP_GET, handleEvents);
+    server.on("/sysinfo", HTTP_POST, handleSysInfo);
+    server.on("/get_logs", HTTP_GET, handleGetLogs);
+
+    server.on("/files", HTTP_GET, handleGetFileOrDir);
+    server.on("/delete_file", HTTP_POST, handleDeleteFile);
+    server.on("/create_file", HTTP_POST, handleCreateFile);
+    server.on("/create_dir", HTTP_POST, handleCreateDir);
+
+    server.on("/execute_ducky", HTTP_POST, handleExecuteDucky);
+    server.on("/submit", HTTP_POST, handleSubmit);
+    server.on("/settings", HTTP_POST, handleSettings);
+    server.on("/settings", HTTP_GET, handleSettings);
+    server.on("/execute", HTTP_POST, handleExecuteScript);
+    server.on("/save_script", HTTP_POST, handleSaveScript);
+    server.on("/delete_script", HTTP_POST, handleDeleteScript);
+    server.on("/list_scripts", HTTP_GET, handleListScripts);
+    server.on("/format_sd", HTTP_POST, handleFormatSD);
+    server.on("/convert_powershell", HTTP_POST, handleConvertPowerShell);
+    
+    server.on("/upload", HTTP_POST, []() {
+        if (!checkAuth()) return;
+        logRequest(server);
+        server.send(200, "text/plain", "File uploaded");
+    }, handleFileUpload);
+    
+    server.onNotFound(handleNotFoundRouter);
+    server.begin();
+    Serial.println("HTTP server started");
+}
+
+// ============================================================================
+// Settings Management
+// ============================================================================
+void loadSettings() {
+    File file = SD.open("/settings.json");
+    if (!file) {
+        Serial.println("No settings.json - using defaults");
+        Serial.println("IMPORTANT: Create settings.json with your WiFi and API credentials!");
+        return;
+    }
+    
+    JsonDocument doc;
+    if (deserializeJson(doc, file)) {
+        Serial.println("Failed to parse settings.json");
+        file.close();
+        return;
+    }
+    
+    settings.ssid = doc["ssid"] | settings.ssid;
+    settings.password = doc["password"] | settings.password;
+    settings.openai_api_key = doc["openai_api_key"] | settings.openai_api_key;
+    settings.model = doc["model"] | settings.model;
+    settings.auth_username = doc["auth_username"] | settings.auth_username;
+    settings.auth_password = doc["auth_password"] | settings.auth_password;
+    settings.max_completion_tokens = doc["max_completion_tokens"] | settings.max_completion_tokens;
+    settings.temperature = doc["temperature"] | settings.temperature;
+    settings.top_p = doc["top_p"] | settings.top_p;
+    settings.frequency_penalty = doc["frequency_penalty"] | settings.frequency_penalty;
+    settings.presence_penalty = doc["presence_penalty"] | settings.presence_penalty;
+    settings.typing_delay = doc["typing_delay"] | settings.typing_delay;
+    settings.command_delay = doc["command_delay"] | settings.command_delay;
+    settings.add_more_delay = doc["add_more_delay"] | settings.add_more_delay;
+    settings.auth_enabled = doc["auth_enabled"] | settings.auth_enabled;
+    
+    file.close();
+    Serial.println("Settings loaded from SD card");
+}
+
+void saveSettings() {
+    File file = SD.open("/settings.json", FILE_WRITE);
+    if (!file) {
+        Serial.println("Failed to open settings.json for writing");
+        return;
+    }
+    
+    JsonDocument doc;
+    doc["ssid"] = settings.ssid;
+    doc["password"] = settings.password;
+    doc["openai_api_key"] = settings.openai_api_key;
+    doc["model"] = settings.model;
+    doc["auth_username"] = settings.auth_username;
+    doc["auth_password"] = settings.auth_password;
+    doc["max_completion_tokens"] = settings.max_completion_tokens;
+    doc["typing_delay"] = settings.typing_delay;
+    doc["command_delay"] = settings.command_delay;
+    doc["add_more_delay"] = settings.add_more_delay;
+    doc["auth_enabled"] = settings.auth_enabled;
+    
+    char buf[10];
+    snprintf(buf, sizeof(buf), "%.2f", settings.temperature); doc["temperature"] = buf;
+    snprintf(buf, sizeof(buf), "%.2f", settings.top_p); doc["top_p"] = buf;
+    snprintf(buf, sizeof(buf), "%.2f", settings.frequency_penalty); doc["frequency_penalty"] = buf;
+    snprintf(buf, sizeof(buf), "%.2f", settings.presence_penalty); doc["presence_penalty"] = buf;
+    
+    serializeJson(doc, file);
+    file.close();
+    Serial.println("Settings saved");
+}
+
+void handleSettings() {
+    if (!checkAuth()) return;
+    logRequest(server);
+    
+    if (server.method() == HTTP_POST) {
+        JsonDocument doc;
+        if (deserializeJson(doc, server.arg("plain"))) {
+            server.send(400, "text/plain", "Invalid JSON");
+            return;
+        }
+        
+        if (doc.containsKey("ssid")) settings.ssid = doc["ssid"].as<String>();
+        if (doc.containsKey("password") && doc["password"].as<String>() != "********") 
+            settings.password = doc["password"].as<String>();
+        if (doc.containsKey("openai_api_key") && !doc["openai_api_key"].as<String>().startsWith("sk-..."))
+            settings.openai_api_key = doc["openai_api_key"].as<String>();
+        if (doc.containsKey("model")) settings.model = doc["model"].as<String>();
+        if (doc.containsKey("auth_username")) settings.auth_username = doc["auth_username"].as<String>();
+        if (doc.containsKey("auth_password") && doc["auth_password"].as<String>() != "********")
+            settings.auth_password = doc["auth_password"].as<String>();
+        if (doc.containsKey("max_completion_tokens")) settings.max_completion_tokens = doc["max_completion_tokens"];
+        if (doc.containsKey("temperature")) settings.temperature = doc["temperature"];
+        if (doc.containsKey("typing_delay")) settings.typing_delay = doc["typing_delay"];
+        if (doc.containsKey("command_delay")) settings.command_delay = doc["command_delay"];
+        
+        saveSettings();
+        server.send(200, "text/plain", "Settings saved");
+    } else {
+        JsonDocument doc;
+        doc["ssid"] = settings.ssid;
+        doc["password"] = settings.password.length() > 0 ? "********" : "";
+        doc["openai_api_key"] = settings.openai_api_key.length() > 0 ? "sk-...configured" : "";
+        doc["model"] = settings.model;
+        doc["auth_username"] = settings.auth_username;
+        doc["auth_password"] = settings.auth_password.length() > 0 ? "********" : "";
+        doc["max_completion_tokens"] = settings.max_completion_tokens;
+        doc["temperature"] = settings.temperature;
+        doc["typing_delay"] = settings.typing_delay;
+        doc["command_delay"] = settings.command_delay;
+        
+        String jsonString;
+        serializeJson(doc, jsonString);
+        server.send(200, "application/json", jsonString);
+    }
+}
+
+// ============================================================================
+// Logging Functions
+// ============================================================================
+void logRequest(WebServer& svr) {
+    if (requestLogBuffer.length() > 2048) {
+        requestLogBuffer = requestLogBuffer.substring(requestLogBuffer.length() - 1024);
+    }
+    
+    String clientIP = svr.client().remoteIP().toString();
+    String method = (svr.method() == HTTP_GET) ? "GET" : (svr.method() == HTTP_POST) ? "POST" : "OTHER";
+    String log = "[" + clientIP + "] " + method + " " + svr.uri() + "\n";
+    requestLogBuffer += log;
+    Serial.print(log);
+}
+
+void handleGetLogs() {
+    if (!checkAuth()) return;
+    
+    if (requestLogBuffer.length() > 0) {
+        String temp = requestLogBuffer;
+        requestLogBuffer = "";
+        server.send(200, "text/plain", temp);
+    } else {
+        server.send(200, "text/plain", "");
+    }
+}
+
+void pushSseEvent(const String& eventName, const String& data) {
+    if (feedbackClient && feedbackClient.connected()) {
+        feedbackClient.print("event: " + eventName + "\n");
+        feedbackClient.print("data: " + data + "\n\n");
+        feedbackClient.flush();
+    }
+}
+
+// ============================================================================
+// Status and Events Handlers
+// ============================================================================
+void handleStatus() {
+    if (!checkAuth()) return;
+    logRequest(server);
+    
+    JsonDocument doc;
+    doc["ssid"] = WiFi.SSID();
+    doc["rssi"] = WiFi.RSSI();
+    doc["ip"] = WiFi.localIP().toString();
+    doc["free_sd"] = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
+    doc["total_sd"] = SD.totalBytes() / (1024 * 1024);
+    doc["heap"] = ESP.getFreeHeap();
+    
+    String jsonString;
+    serializeJson(doc, jsonString);
+    server.send(200, "application/json", jsonString);
+}
+
+void handleFeedback() {
+    if (!checkAuth()) return;
+    logRequest(server);
+    
+    if (server.hasArg("plain")) {
+        pushSseEvent("message", server.arg("plain"));
+        server.send(200, "text/plain", "OK");
+    } else {
+        server.send(400, "text/plain", "Bad Request");
+    }
+}
+
+void handleEvents() {
+    if (!checkAuth()) return;
+    
+    feedbackClient = server.client();
+    feedbackClient.setNoDelay(true);
+    server.sendHeader("Content-Type", "text/event-stream");
+    server.sendHeader("Cache-Control", "no-cache");
+    server.send(200);
+
+    while (feedbackClient.connected()) {
+        if (feedbackMessage != "") {
+            pushSseEvent("message", feedbackMessage);
+            feedbackMessage = "";
+        }
+        delay(100);
+    }
+}
+
+void handleSysInfo() {
+    if (!checkAuth()) return;
+    logRequest(server);
+    
+    if (server.hasArg("plain")) {
+        pushSseEvent("sysinfo", server.arg("plain"));
+        server.send(200, "text/plain", "OK");
+    } else {
+        server.send(400, "text/plain", "Bad Request");
+    }
+}
+
+// ============================================================================
+// File Operation Handlers
+// ============================================================================
+void handleCreateFile() {
+    if (!checkAuth()) return;
+    logRequest(server);
+    
+    if (!server.hasArg("path")) {
+        server.send(400, "text/plain", "Missing path");
+        return;
+    }
+    
+    String path = server.arg("path");
+    if (!isValidPath(path)) {
+        server.send(400, "text/plain", "Invalid path");
+        return;
+    }
+    
+    if (SD.exists(path)) {
+        server.send(409, "text/plain", "Already exists");
+        return;
+    }
+    
+    File file = SD.open(path, FILE_WRITE);
+    if (file) {
+        file.close();
+        server.send(201, "text/plain", "Created");
+    } else {
+        server.send(500, "text/plain", "Create failed");
+    }
+}
+
+void handleCreateDir() {
+    if (!checkAuth()) return;
+    logRequest(server);
+    
+    if (!server.hasArg("path")) {
+        server.send(400, "text/plain", "Missing path");
+        return;
+    }
+    
+    String path = server.arg("path");
+    if (!isValidPath(path)) {
+        server.send(400, "text/plain", "Invalid path");
+        return;
+    }
+    
+    if (SD.exists(path)) {
+        server.send(409, "text/plain", "Already exists");
+        return;
+    }
+    
+    if (SD.mkdir(path)) {
+        server.send(201, "text/plain", "Created");
+    } else {
+        server.send(500, "text/plain", "Create failed");
+    }
+}
+
+void handleGetFileOrDir() {
+    if (!checkAuth()) return;
+    logRequest(server);
+    
+    if (!server.hasArg("path")) {
+        server.send(400, "text/plain", "Missing path");
+        return;
+    }
+    
+    String path = server.arg("path");
+    if (!path.startsWith("/")) path = "/" + path;
+    if (!isValidPath(path)) {
+        server.send(400, "text/plain", "Invalid path");
+        return;
+    }
+    
+    File file = SD.open(path);
+    if (!file) {
+        server.send(404, "text/plain", "Not found");
+        return;
+    }
+    
+    if (file.isDirectory()) {
+        String json = "[";
+        File entry = file.openNextFile();
+        while (entry) {
+            if (json != "[") json += ",";
+            String name = String(entry.name());
+            json += "{\"type\":\"" + String(entry.isDirectory() ? "dir" : "file") + "\",";
+            json += "\"name\":\"" + name.substring(name.lastIndexOf('/') + 1) + "\",";
+            json += "\"size\":" + String(entry.size()) + "}";
+            entry.close();
+            entry = file.openNextFile();
+        }
+        json += "]";
+        file.close();
+        server.send(200, "application/json", json);
+    } else {
+        server.streamFile(file, "text/plain");
+        file.close();
+    }
+}
+
+void handleDeleteFile() {
+    if (!checkAuth()) return;
+    logRequest(server);
+    
+    if (!server.hasArg("path")) {
+        server.send(400, "text/plain", "Missing path");
+        return;
+    }
+    
+    String path = server.arg("path");
+    if (!isValidPath(path) || path == "/") {
+        server.send(403, "text/plain", "Forbidden");
+        return;
+    }
+    
+    if (SD.remove(path) || SD.rmdir(path)) {
+        server.send(200, "text/plain", "Deleted");
+    } else {
+        server.send(500, "text/plain", "Delete failed");
+    }
+}
+
+void handleFileServer() {
+    String uri = server.uri();
+    if (uri.startsWith("/f/") && isValidPath(uri)) {
+        String sdPath = "/payloads" + uri.substring(2);
+        logRequest(server);
+        if (SD.exists(sdPath)) {
+            File file = SD.open(sdPath, FILE_READ);
+            server.streamFile(file, "application/octet-stream");
+            file.close();
+        } else {
+            server.send(404, "text/plain", "Not found");
+        }
+    } else {
+        server.send(403, "text/plain", "Forbidden");
+    }
+}
+
 
 
 
@@ -1192,422 +1612,7 @@ void handleDuckyPage() {
 
 
 
- 
 
- 
-// ============================================================================
-// Path Validation (Security)
-// ============================================================================
-bool isValidPath(const String& path) {
-    if (path.indexOf("..") != -1) return false;
-    if (path.indexOf("//") != -1) return false;
-    if (!path.startsWith("/")) return false;
-    for (int i = 0; i < path.length(); i++) {
-        if (path.charAt(i) == '\0') return false;
-    }
-    return true;
-}
-
-// ============================================================================
-// Web Server Setup
-// ============================================================================
-void startWebServer() {
-    // Public endpoint
-    server.on("/login", HTTP_GET, handleLogin);
-    server.on("/login", HTTP_POST, handleLogin);
-    server.on("/logout", handleLogout);
-    
-    // Protected endpoints
-    server.on("/", handleRoot);
-    server.on("/settings_page", HTTP_GET, handleSettingsPage);
-    server.on("/file_manager", HTTP_GET, handleFileManagerPage);
-    server.on("/ducky", HTTP_GET, handleDuckyPage);
-    
-    server.on("/status", HTTP_GET, handleStatus);
-    server.on("/feedback", HTTP_POST, handleFeedback);
-    server.on("/events", HTTP_GET, handleEvents);
-    server.on("/sysinfo", HTTP_POST, handleSysInfo);
-    server.on("/get_logs", HTTP_GET, handleGetLogs);
-
-    server.on("/files", HTTP_GET, handleGetFileOrDir);
-    server.on("/delete_file", HTTP_POST, handleDeleteFile);
-    server.on("/create_file", HTTP_POST, handleCreateFile);
-    server.on("/create_dir", HTTP_POST, handleCreateDir);
-
-    server.on("/execute_ducky", HTTP_POST, handleExecuteDucky);
-    server.on("/submit", HTTP_POST, handleSubmit);
-    server.on("/settings", HTTP_POST, handleSettings);
-    server.on("/settings", HTTP_GET, handleSettings);
-    server.on("/execute", HTTP_POST, handleExecuteScript);
-    server.on("/save_script", HTTP_POST, handleSaveScript);
-    server.on("/delete_script", HTTP_POST, handleDeleteScript);
-    server.on("/list_scripts", HTTP_GET, handleListScripts);
-    server.on("/format_sd", HTTP_POST, handleFormatSD);
-    server.on("/convert_powershell", HTTP_POST, handleConvertPowerShell);
-    
-    server.on("/upload", HTTP_POST, []() {
-        if (!checkAuth()) return;
-        logRequest(server);
-        server.send(200, "text/plain", "File uploaded");
-    }, handleFileUpload);
-    
-    server.onNotFound(handleNotFoundRouter);
-    server.begin();
-    Serial.println("HTTP server started");
-}
-
-// ============================================================================
-// Settings Management
-// ============================================================================
-void loadSettings() {
-    File file = SD.open("/settings.json");
-    if (!file) {
-        Serial.println("No settings.json - using defaults");
-        Serial.println("IMPORTANT: Create settings.json with your WiFi and API credentials!");
-        return;
-    }
-    
-    JsonDocument doc;
-    if (deserializeJson(doc, file)) {
-        Serial.println("Failed to parse settings.json");
-        file.close();
-        return;
-    }
-    
-    settings.ssid = doc["ssid"] | settings.ssid;
-    settings.password = doc["password"] | settings.password;
-    settings.openai_api_key = doc["openai_api_key"] | settings.openai_api_key;
-    settings.model = doc["model"] | settings.model;
-    settings.auth_username = doc["auth_username"] | settings.auth_username;
-    settings.auth_password = doc["auth_password"] | settings.auth_password;
-    settings.max_completion_tokens = doc["max_completion_tokens"] | settings.max_completion_tokens;
-    settings.temperature = doc["temperature"] | settings.temperature;
-    settings.top_p = doc["top_p"] | settings.top_p;
-    settings.frequency_penalty = doc["frequency_penalty"] | settings.frequency_penalty;
-    settings.presence_penalty = doc["presence_penalty"] | settings.presence_penalty;
-    settings.typing_delay = doc["typing_delay"] | settings.typing_delay;
-    settings.command_delay = doc["command_delay"] | settings.command_delay;
-    settings.add_more_delay = doc["add_more_delay"] | settings.add_more_delay;
-    settings.auth_enabled = doc["auth_enabled"] | settings.auth_enabled;
-    
-    file.close();
-    Serial.println("Settings loaded from SD card");
-}
-
-void saveSettings() {
-    File file = SD.open("/settings.json", FILE_WRITE);
-    if (!file) {
-        Serial.println("Failed to open settings.json for writing");
-        return;
-    }
-    
-    JsonDocument doc;
-    doc["ssid"] = settings.ssid;
-    doc["password"] = settings.password;
-    doc["openai_api_key"] = settings.openai_api_key;
-    doc["model"] = settings.model;
-    doc["auth_username"] = settings.auth_username;
-    doc["auth_password"] = settings.auth_password;
-    doc["max_completion_tokens"] = settings.max_completion_tokens;
-    doc["typing_delay"] = settings.typing_delay;
-    doc["command_delay"] = settings.command_delay;
-    doc["add_more_delay"] = settings.add_more_delay;
-    doc["auth_enabled"] = settings.auth_enabled;
-    
-    char buf[10];
-    snprintf(buf, sizeof(buf), "%.2f", settings.temperature); doc["temperature"] = buf;
-    snprintf(buf, sizeof(buf), "%.2f", settings.top_p); doc["top_p"] = buf;
-    snprintf(buf, sizeof(buf), "%.2f", settings.frequency_penalty); doc["frequency_penalty"] = buf;
-    snprintf(buf, sizeof(buf), "%.2f", settings.presence_penalty); doc["presence_penalty"] = buf;
-    
-    serializeJson(doc, file);
-    file.close();
-    Serial.println("Settings saved");
-}
-
-void handleSettings() {
-    if (!checkAuth()) return;
-    logRequest(server);
-    
-    if (server.method() == HTTP_POST) {
-        JsonDocument doc;
-        if (deserializeJson(doc, server.arg("plain"))) {
-            server.send(400, "text/plain", "Invalid JSON");
-            return;
-        }
-        
-        if (doc.containsKey("ssid")) settings.ssid = doc["ssid"].as<String>();
-        if (doc.containsKey("password") && doc["password"].as<String>() != "********") 
-            settings.password = doc["password"].as<String>();
-        if (doc.containsKey("openai_api_key") && !doc["openai_api_key"].as<String>().startsWith("sk-..."))
-            settings.openai_api_key = doc["openai_api_key"].as<String>();
-        if (doc.containsKey("model")) settings.model = doc["model"].as<String>();
-        if (doc.containsKey("auth_username")) settings.auth_username = doc["auth_username"].as<String>();
-        if (doc.containsKey("auth_password") && doc["auth_password"].as<String>() != "********")
-            settings.auth_password = doc["auth_password"].as<String>();
-        if (doc.containsKey("max_completion_tokens")) settings.max_completion_tokens = doc["max_completion_tokens"];
-        if (doc.containsKey("temperature")) settings.temperature = doc["temperature"];
-        if (doc.containsKey("typing_delay")) settings.typing_delay = doc["typing_delay"];
-        if (doc.containsKey("command_delay")) settings.command_delay = doc["command_delay"];
-        
-        saveSettings();
-        server.send(200, "text/plain", "Settings saved");
-    } else {
-        JsonDocument doc;
-        doc["ssid"] = settings.ssid;
-        doc["password"] = settings.password.length() > 0 ? "********" : "";
-        doc["openai_api_key"] = settings.openai_api_key.length() > 0 ? "sk-...configured" : "";
-        doc["model"] = settings.model;
-        doc["auth_username"] = settings.auth_username;
-        doc["auth_password"] = settings.auth_password.length() > 0 ? "********" : "";
-        doc["max_completion_tokens"] = settings.max_completion_tokens;
-        doc["temperature"] = settings.temperature;
-        doc["typing_delay"] = settings.typing_delay;
-        doc["command_delay"] = settings.command_delay;
-        
-        String jsonString;
-        serializeJson(doc, jsonString);
-        server.send(200, "application/json", jsonString);
-    }
-}
-
-// ============================================================================
-// Logging Functions
-// ============================================================================
-void logRequest(WebServer& svr) {
-    if (requestLogBuffer.length() > 2048) {
-        requestLogBuffer = requestLogBuffer.substring(requestLogBuffer.length() - 1024);
-    }
-    
-    String clientIP = svr.client().remoteIP().toString();
-    String method = (svr.method() == HTTP_GET) ? "GET" : (svr.method() == HTTP_POST) ? "POST" : "OTHER";
-    String log = "[" + clientIP + "] " + method + " " + svr.uri() + "\n";
-    requestLogBuffer += log;
-    Serial.print(log);
-}
-
-void handleGetLogs() {
-    if (!checkAuth()) return;
-    
-    if (requestLogBuffer.length() > 0) {
-        String temp = requestLogBuffer;
-        requestLogBuffer = "";
-        server.send(200, "text/plain", temp);
-    } else {
-        server.send(200, "text/plain", "");
-    }
-}
-
-void pushSseEvent(const String& eventName, const String& data) {
-    if (feedbackClient && feedbackClient.connected()) {
-        feedbackClient.print("event: " + eventName + "\n");
-        feedbackClient.print("data: " + data + "\n\n");
-        feedbackClient.flush();
-    }
-}
-
-// ============================================================================
-// Status and Events Handlers
-// ============================================================================
-void handleStatus() {
-    if (!checkAuth()) return;
-    logRequest(server);
-    
-    JsonDocument doc;
-    doc["ssid"] = WiFi.SSID();
-    doc["rssi"] = WiFi.RSSI();
-    doc["ip"] = WiFi.localIP().toString();
-    doc["free_sd"] = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
-    doc["total_sd"] = SD.totalBytes() / (1024 * 1024);
-    doc["heap"] = ESP.getFreeHeap();
-    
-    String jsonString;
-    serializeJson(doc, jsonString);
-    server.send(200, "application/json", jsonString);
-}
-
-void handleFeedback() {
-    if (!checkAuth()) return;
-    logRequest(server);
-    
-    if (server.hasArg("plain")) {
-        pushSseEvent("message", server.arg("plain"));
-        server.send(200, "text/plain", "OK");
-    } else {
-        server.send(400, "text/plain", "Bad Request");
-    }
-}
-
-void handleEvents() {
-    if (!checkAuth()) return;
-    
-    feedbackClient = server.client();
-    feedbackClient.setNoDelay(true);
-    server.sendHeader("Content-Type", "text/event-stream");
-    server.sendHeader("Cache-Control", "no-cache");
-    server.send(200);
-
-    while (feedbackClient.connected()) {
-        if (feedbackMessage != "") {
-            pushSseEvent("message", feedbackMessage);
-            feedbackMessage = "";
-        }
-        delay(100);
-    }
-}
-
-void handleSysInfo() {
-    if (!checkAuth()) return;
-    logRequest(server);
-    
-    if (server.hasArg("plain")) {
-        pushSseEvent("sysinfo", server.arg("plain"));
-        server.send(200, "text/plain", "OK");
-    } else {
-        server.send(400, "text/plain", "Bad Request");
-    }
-}
-
-// ============================================================================
-// File Operation Handlers
-// ============================================================================
-void handleCreateFile() {
-    if (!checkAuth()) return;
-    logRequest(server);
-    
-    if (!server.hasArg("path")) {
-        server.send(400, "text/plain", "Missing path");
-        return;
-    }
-    
-    String path = server.arg("path");
-    if (!isValidPath(path)) {
-        server.send(400, "text/plain", "Invalid path");
-        return;
-    }
-    
-    if (SD.exists(path)) {
-        server.send(409, "text/plain", "Already exists");
-        return;
-    }
-    
-    File file = SD.open(path, FILE_WRITE);
-    if (file) {
-        file.close();
-        server.send(201, "text/plain", "Created");
-    } else {
-        server.send(500, "text/plain", "Create failed");
-    }
-}
-
-void handleCreateDir() {
-    if (!checkAuth()) return;
-    logRequest(server);
-    
-    if (!server.hasArg("path")) {
-        server.send(400, "text/plain", "Missing path");
-        return;
-    }
-    
-    String path = server.arg("path");
-    if (!isValidPath(path)) {
-        server.send(400, "text/plain", "Invalid path");
-        return;
-    }
-    
-    if (SD.exists(path)) {
-        server.send(409, "text/plain", "Already exists");
-        return;
-    }
-    
-    if (SD.mkdir(path)) {
-        server.send(201, "text/plain", "Created");
-    } else {
-        server.send(500, "text/plain", "Create failed");
-    }
-}
-
-void handleGetFileOrDir() {
-    if (!checkAuth()) return;
-    logRequest(server);
-    
-    if (!server.hasArg("path")) {
-        server.send(400, "text/plain", "Missing path");
-        return;
-    }
-    
-    String path = server.arg("path");
-    if (!path.startsWith("/")) path = "/" + path;
-    if (!isValidPath(path)) {
-        server.send(400, "text/plain", "Invalid path");
-        return;
-    }
-    
-    File file = SD.open(path);
-    if (!file) {
-        server.send(404, "text/plain", "Not found");
-        return;
-    }
-    
-    if (file.isDirectory()) {
-        String json = "[";
-        File entry = file.openNextFile();
-        while (entry) {
-            if (json != "[") json += ",";
-            String name = String(entry.name());
-            json += "{\"type\":\"" + String(entry.isDirectory() ? "dir" : "file") + "\",";
-            json += "\"name\":\"" + name.substring(name.lastIndexOf('/') + 1) + "\",";
-            json += "\"size\":" + String(entry.size()) + "}";
-            entry.close();
-            entry = file.openNextFile();
-        }
-        json += "]";
-        file.close();
-        server.send(200, "application/json", json);
-    } else {
-        server.streamFile(file, "text/plain");
-        file.close();
-    }
-}
-
-void handleDeleteFile() {
-    if (!checkAuth()) return;
-    logRequest(server);
-    
-    if (!server.hasArg("path")) {
-        server.send(400, "text/plain", "Missing path");
-        return;
-    }
-    
-    String path = server.arg("path");
-    if (!isValidPath(path) || path == "/") {
-        server.send(403, "text/plain", "Forbidden");
-        return;
-    }
-    
-    if (SD.remove(path) || SD.rmdir(path)) {
-        server.send(200, "text/plain", "Deleted");
-    } else {
-        server.send(500, "text/plain", "Delete failed");
-    }
-}
-
-void handleFileServer() {
-    String uri = server.uri();
-    if (uri.startsWith("/f/") && isValidPath(uri)) {
-        String sdPath = "/payloads" + uri.substring(2);
-        logRequest(server);
-        if (SD.exists(sdPath)) {
-            File file = SD.open(sdPath, FILE_READ);
-            server.streamFile(file, "application/octet-stream");
-            file.close();
-        } else {
-            server.send(404, "text/plain", "Not found");
-        }
-    } else {
-        server.send(403, "text/plain", "Forbidden");
-    }
-}
 
 void handleNotFoundRouter() {
     if (server.uri().startsWith("/f/")) {
@@ -1851,10 +1856,37 @@ String parseAndExecuteAiResponse(const String& response) {
 // ============================================================================
 // Keyboard Functions
 // ============================================================================
-void sendKeyboardText(const String& text) {
+/*void sendKeyboardText(const String& text) {
     for (size_t i = 0; i < text.length(); i++) {
         Keyboard.write(text.charAt(i));
         delay(settings.typing_delay);
+    }
+}*/
+
+void sendKeyboardText(const String& text) {
+    const int BASE_DELAY_US = 1500;  // Base delay in microseconds (1.5ms)
+    const int PROBLEM_CHAR_EXTRA_MS = 30;
+    const int BATCH_SIZE = 10;
+    
+    for (size_t i = 0; i < text.length(); i++) {
+        char c = text.charAt(i);
+        
+        // Press and release with minimal hold
+        Keyboard.press(c);
+        delayMicroseconds(600);
+        Keyboard.release(c);
+        
+        // Check for problematic characters that need extra time
+        if (c == '-' || c == '\\' || c == '"' || c == '\'' || c == '|' || c == '<' || c == '>') {
+            delay(PROBLEM_CHAR_EXTRA_MS);
+        } else {
+            delayMicroseconds(BASE_DELAY_US + (settings.typing_delay * 10));
+        }
+        
+        // Periodic buffer sync
+        if ((i + 1) % BATCH_SIZE == 0) {
+            delay(2);
+        }
     }
 }
 
