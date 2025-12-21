@@ -56,8 +56,11 @@ struct Settings {
     String ssid = "";                    // Configure in settings.json
     String password = "";                // Configure in settings.json
     String openai_api_key = "";          // Configure in settings.json
+   
     String auth_username = "admin";      // Change this!
     String auth_password = "changeme";   // Change this!
+
+    String model = "gpt-4o";
     int max_completion_tokens = 1000;
     float temperature = 0.40f;
     float top_p = 1.00f;
@@ -66,7 +69,7 @@ struct Settings {
     int typing_delay = 150;
     int command_delay = 150;
     int add_more_delay = 0;
-    bool auth_enabled = true;
+    bool auth_enabled = false;
 };
 
 Settings settings;
@@ -1715,7 +1718,7 @@ void handleListScripts() {
     server.send(200, "application/json", getScriptList());
 }
 
-String getScriptList() {
+/*String getScriptList() {
     File root = SD.open("/scripts");
     if (!root) return "[]";
     
@@ -1734,7 +1737,40 @@ String getScriptList() {
     list += "]";
     root.close();
     return list;
+}*/
+
+
+String getScriptList() {
+    File root = SD.open("/scripts");
+    if (!root) return "[]";
+
+    String scriptList = "[";
+    int count = 0;
+    int maxFiles = 50;  // Limit to 50 files
+    
+    File entry = root.openNextFile();
+    while (entry && count < maxFiles) {
+        if (!entry.isDirectory() && String(entry.name()).endsWith(".txt")) {
+            if (scriptList != "[") scriptList += ",";
+            String fname = String(entry.name());
+            fname.replace(".txt", "");
+            scriptList += "\"" + fname + "\"";
+            count++;
+        }
+        entry.close();
+        entry = root.openNextFile();
+    }
+    scriptList += "]";
+    root.close();
+    
+    if (count >= maxFiles) {
+        Serial.println("Warning: Script list truncated at " + String(maxFiles) + " files");
+    }
+    
+    return scriptList;
 }
+
+
 
 void handleExecuteScript() {
     if (!checkAuth()) return;
