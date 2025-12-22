@@ -53,12 +53,15 @@ String requestLogBuffer = "";
 
 // Settings structure with safe defaults
 struct Settings {
+    
     String ssid = "";                    // Configure in settings.json
     String password = "";                // Configure in settings.json
     String openai_api_key = "";          // Configure in settings.json
-   
+    
     String auth_username = "admin";      // Change this!
     String auth_password = "changeme";   // Change this!
+
+
 
     String model = "gpt-4o";
     int max_completion_tokens = 1000;
@@ -66,7 +69,7 @@ struct Settings {
     float top_p = 1.00f;
     float frequency_penalty = 0.00f;
     float presence_penalty = 0.00f;
-    int typing_delay = 150;
+    int typing_delay = 200;
     int command_delay = 150;
     int add_more_delay = 0;
     bool auth_enabled = false;
@@ -85,7 +88,7 @@ void startWebServer();
 void loadSettings();
 void saveSettings();
 void displayOnLCD(const String& message);
-
+ 
 // Authentication
 bool checkAuth();
 bool isValidPath(const String& path);
@@ -118,7 +121,9 @@ void handleConvertPowerShell();
 void handleFileUpload();
 void handleFormatSD();
 void handleFileServer();
-
+void handleTestTyping();
+void testTypingSpeed();
+ 
 // Helper functions
 void logRequest(WebServer& svr);
 void pushSseEvent(const String& eventName, const String& data);
@@ -302,6 +307,7 @@ void startWebServer() {
     server.on("/settings_page", HTTP_GET, handleSettingsPage);
     server.on("/file_manager", HTTP_GET, handleFileManagerPage);
     server.on("/ducky", HTTP_GET, handleDuckyPage);
+    server.on("/typing_benchmark", HTTP_GET, handleTestTyping); 
     
     server.on("/status", HTTP_GET, handleStatus);
     server.on("/feedback", HTTP_POST, handleFeedback);
@@ -767,6 +773,7 @@ void handleRoot() {
                 <a href="/ducky">🦆 Ducky Studio</a>
                 <a href="/file_manager">📁 Files</a>
                 <a href="/logout">🚪 Logout</a>
+                <a href="/typing_benchmark">Typing Benchmark</a>
             </nav>
         </header>
         <div class="grid">
@@ -1899,32 +1906,103 @@ String parseAndExecuteAiResponse(const String& response) {
     }
 }*/
 
-void sendKeyboardText(const String& text) {
-    const int BASE_DELAY_US = 1500;  // Base delay in microseconds (1.5ms)
-    const int PROBLEM_CHAR_EXTRA_MS = 30;
-    const int BATCH_SIZE = 10;
+/*void sendKeyboardText(const String& text) {
+    const int BASE_DELAY_US = 3000;  // Increase to 3ms (was 1.8ms)
+    const int PROBLEM_CHAR_EXTRA_MS = 50;  // Increase to 50ms
+    const int BATCH_SIZE = 5;  // Smaller batches (was 10)
     
     for (size_t i = 0; i < text.length(); i++) {
         char c = text.charAt(i);
         
         // Press and release with minimal hold
         Keyboard.press(c);
-        delayMicroseconds(600);
+        delayMicroseconds(1000);  // Increase hold time to 1ms (was 600us)
         Keyboard.release(c);
         
         // Check for problematic characters that need extra time
-        if (c == '-' || c == '\\' || c == '"' || c == '\'' || c == '|' || c == '<' || c == '>') {
+        if (c == '-' || c == '\\' || c == '"' || c == '\'' || c == '|' || c == '<' || c == '>' || c == ',' || c == '.') {
             delay(PROBLEM_CHAR_EXTRA_MS);
         } else {
             delayMicroseconds(BASE_DELAY_US + (settings.typing_delay * 10));
         }
         
-        // Periodic buffer sync
+        // Periodic buffer sync - more frequent
         if ((i + 1) % BATCH_SIZE == 0) {
-            delay(2);
+            delay(5);  // Increase sync delay to 5ms
+        }
+    }
+}*/
+
+
+void sendKeyboardText(const String& text) {
+    const int CHAR_DELAY_MS = 10;  
+    const int HOLD_TIME_US = 35;   
+    
+    for (size_t i = 0; i < text.length(); i++) {
+        char c = text.charAt(i);
+        
+        Keyboard.press(c);
+        delayMicroseconds(HOLD_TIME_US);
+        Keyboard.release(c);
+ 
+        delay(CHAR_DELAY_MS);
+        
+        // Extra pause every 5 characters to let buffer clear
+        if ((i + 1) % 5 == 0) {
+            delay(CHAR_DELAY_MS);
         }
     }
 }
+
+
+void testTypingSpeed() {
+    Keyboard.begin();
+    delay(1000);
+    
+    // Open Run dialog
+    Keyboard.press(KEY_LEFT_GUI);
+    Keyboard.press('r');
+    delay(200);
+    Keyboard.releaseAll();
+    delay(500);
+    
+    // Open Notepad
+    Keyboard.print("C:\\Windows\\System32\\notepad.exe");
+    delay(200);
+    Keyboard.press(KEY_RETURN);
+    Keyboard.releaseAll();
+    delay(3000);
+    
+    String testString = "The quick brown fox jumps over the lazy dog, '0, 1, 2, 3, 4, 5, 6, 7, 8, 9'\n";
+    
+    for (int i = 0; i < 3; i++) {
+        sendKeyboardText(testString);
+        delay(200);  // Full second between lines
+    }
+    
+    Keyboard.end();
+}
+
+
+
+// Add this handler to your web server handlers section
+void handleTestTyping() {
+    logRequest(server);
+    testTypingSpeed();
+    server.send(200, "text/plain", "Typing test initiated - check Notepad!");
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 String convertPowerShellToSingleCommand(const String& script) {
     String result = "\"";
