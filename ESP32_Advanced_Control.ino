@@ -1,9 +1,3 @@
-#ifndef ARDUINO_USB_MODE
-#error This ESP32 SoC has no Native USB interface
-#elif ARDUINO_USB_MODE == 1
-#warning This sketch should be used when USB is in OTG mode
-#else
-
 #include "esp_event.h"
 #include <WiFi.h>
 #include <WebServer.h>
@@ -13,6 +7,7 @@
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <WiFiUdp.h>
 #include "LCD_Driver.h"
 #include "GUI_Paint.h"
 #include "USB.h"
@@ -83,8 +78,16 @@ Settings settings;
 struct SystemConfig {
     bool rndisEnabled = false;           // True = Transparent NAT, False = Airgapped
     bool adblockEnabled = true;          // True = Drop domains in blocklist
+    bool dnsServerEnabled = true;        // Enable DNS server on port 53
     String activePortal = "/portals/default.html";  // Currently active captive portal
-    String dnsServer = "1.1.1.1";        // Upstream DNS server
+    String dnsUpstream = "1.1.1.1";      // Upstream DNS server
+
+    // Secure Browser Settings
+    int browserTimeout = 10000;          // HTTP timeout in ms
+    int browserMaxSize = 50000;          // Max response size in bytes
+    bool browserStripImages = true;      // Replace images with placeholders
+    bool browserStripForms = false;      // Remove form elements
+    String browserUserAgent = "Mozilla/5.0 (compatible; ESP32-SecureBrowser/1.0)";
 };
 
 SystemConfig sysConfig;
@@ -94,6 +97,14 @@ const uint32_t BLOOM_SIZE = 8192;        // 8KB bloom filter (65536 bits)
 const uint8_t BLOOM_HASH_COUNT = 3;      // Number of hash functions
 uint8_t bloomFilter[BLOOM_SIZE];
 bool bloomFilterLoaded = false;
+
+// DNS Server
+WiFiUDP dnsUdp;
+const int DNS_PORT = 53;
+bool dnsServerRunning = false;
+unsigned long dnsBlockedCount = 0;
+unsigned long dnsForwardedCount = 0;
+
 const int buttonPin = 0;
 
 // ============================================================================
@@ -180,8 +191,25 @@ void handleApiSystemConfig();
 // Text-Only Browser Handlers
 void handleBrowser();
 void handleProxyFetch();
+void handleBrowserSettings();
 String sanitizeHtml(const String& html, const String& baseUrl);
 String rewriteLinks(const String& html, const String& baseUrl);
+
+// DNS Server Functions
+void startDnsServer();
+void stopDnsServer();
+void handleDnsRequest();
+void sendDnsResponse(IPAddress &clientIP, uint16_t clientPort, uint8_t* buffer, int len, bool blocked);
+String extractDomainFromDns(uint8_t* buffer, int len);
+
+// Blocklist Editor Handlers
+void handleBlocklistEditor();
+void handleApiBlocklistList();
+void handleApiBlocklistLoad();
+void handleApiBlocklistSave();
+void handleApiBlocklistDelete();
+void handleApiBlocklistReload();
+void handleApiDnsStats();
 
 // ============================================================================
 // Setup and Main Loop
@@ -216,11 +244,22 @@ void setup() {
     displayOnLCD("Start Server");
     startWebServer();
 
+    displayOnLCD("Start DNS");
+    if (sysConfig.dnsServerEnabled) {
+        startDnsServer();
+    }
+
     displayOnLCD(WiFi.localIP().toString());
 }
 
 void loop() {
     server.handleClient();
+
+    // Handle DNS requests if server is running
+    if (dnsServerRunning) {
+        handleDnsRequest();
+    }
+
     delay(2);
 }
 
@@ -416,7 +455,18 @@ void startWebServer() {
 
     // Text-only browser endpoints
     server.on("/browser", HTTP_GET, handleBrowser);
+    server.on("/browser/settings", HTTP_GET, handleBrowserSettings);
+    server.on("/browser/settings", HTTP_POST, handleBrowserSettings);
     server.on("/proxy/fetch", HTTP_GET, handleProxyFetch);
+
+    // Blocklist editor endpoints
+    server.on("/blocklist", HTTP_GET, handleBlocklistEditor);
+    server.on("/api/blocklist/list", HTTP_GET, handleApiBlocklistList);
+    server.on("/api/blocklist/load", HTTP_GET, handleApiBlocklistLoad);
+    server.on("/api/blocklist/save", HTTP_POST, handleApiBlocklistSave);
+    server.on("/api/blocklist/delete", HTTP_POST, handleApiBlocklistDelete);
+    server.on("/api/blocklist/reload", HTTP_POST, handleApiBlocklistReload);
+    server.on("/api/dns/stats", HTTP_GET, handleApiDnsStats);
 
     server.on("/upload", HTTP_POST, []() {
         if (!checkAuth()) return;
@@ -860,7 +910,8 @@ void handleRoot() {
                 <a href="/ducky">🦆 Ducky Studio</a>
                 <a href="/file_manager">📁 Files</a>
                 <a href="/ide/portal">🌐 Portal IDE</a>
-                <a href="/browser">🔒 Secure Browser</a>
+                <a href="/blocklist">🛡️ Blocklist</a>
+                <a href="/browser">🔒 Browser</a>
                 <a href="/logout">🚪 Logout</a>
             </nav>
         </header>
@@ -2310,8 +2361,18 @@ void loadSystemConfig() {
 
     sysConfig.rndisEnabled = doc["rndisEnabled"] | sysConfig.rndisEnabled;
     sysConfig.adblockEnabled = doc["adblockEnabled"] | sysConfig.adblockEnabled;
+    sysConfig.dnsServerEnabled = doc["dnsServerEnabled"] | sysConfig.dnsServerEnabled;
     sysConfig.activePortal = doc["activePortal"] | sysConfig.activePortal;
-    sysConfig.dnsServer = doc["dnsServer"] | sysConfig.dnsServer;
+    sysConfig.dnsUpstream = doc["dnsUpstream"] | sysConfig.dnsUpstream;
+
+    // Browser settings
+    sysConfig.browserTimeout = doc["browserTimeout"] | sysConfig.browserTimeout;
+    sysConfig.browserMaxSize = doc["browserMaxSize"] | sysConfig.browserMaxSize;
+    sysConfig.browserStripImages = doc["browserStripImages"] | sysConfig.browserStripImages;
+    sysConfig.browserStripForms = doc["browserStripForms"] | sysConfig.browserStripForms;
+    if (doc.containsKey("browserUserAgent")) {
+        sysConfig.browserUserAgent = doc["browserUserAgent"].as<String>();
+    }
 
     file.close();
     Serial.println("System config loaded");
@@ -2327,8 +2388,16 @@ void saveSystemConfig() {
     JsonDocument doc;
     doc["rndisEnabled"] = sysConfig.rndisEnabled;
     doc["adblockEnabled"] = sysConfig.adblockEnabled;
+    doc["dnsServerEnabled"] = sysConfig.dnsServerEnabled;
     doc["activePortal"] = sysConfig.activePortal;
-    doc["dnsServer"] = sysConfig.dnsServer;
+    doc["dnsUpstream"] = sysConfig.dnsUpstream;
+
+    // Browser settings
+    doc["browserTimeout"] = sysConfig.browserTimeout;
+    doc["browserMaxSize"] = sysConfig.browserMaxSize;
+    doc["browserStripImages"] = sysConfig.browserStripImages;
+    doc["browserStripForms"] = sysConfig.browserStripForms;
+    doc["browserUserAgent"] = sysConfig.browserUserAgent;
 
     serializeJson(doc, file);
     file.close();
@@ -2844,18 +2913,47 @@ void handleApiSystemConfig() {
 
         if (doc.containsKey("rndisEnabled")) sysConfig.rndisEnabled = doc["rndisEnabled"];
         if (doc.containsKey("adblockEnabled")) sysConfig.adblockEnabled = doc["adblockEnabled"];
+        if (doc.containsKey("dnsServerEnabled")) sysConfig.dnsServerEnabled = doc["dnsServerEnabled"];
         if (doc.containsKey("activePortal")) sysConfig.activePortal = doc["activePortal"].as<String>();
-        if (doc.containsKey("dnsServer")) sysConfig.dnsServer = doc["dnsServer"].as<String>();
+        if (doc.containsKey("dnsUpstream")) sysConfig.dnsUpstream = doc["dnsUpstream"].as<String>();
+
+        // Browser settings
+        if (doc.containsKey("browserTimeout")) sysConfig.browserTimeout = doc["browserTimeout"];
+        if (doc.containsKey("browserMaxSize")) sysConfig.browserMaxSize = doc["browserMaxSize"];
+        if (doc.containsKey("browserStripImages")) sysConfig.browserStripImages = doc["browserStripImages"];
+        if (doc.containsKey("browserStripForms")) sysConfig.browserStripForms = doc["browserStripForms"];
+        if (doc.containsKey("browserUserAgent")) sysConfig.browserUserAgent = doc["browserUserAgent"].as<String>();
 
         saveSystemConfig();
+
+        // Restart DNS server if setting changed
+        if (doc.containsKey("dnsServerEnabled")) {
+            if (sysConfig.dnsServerEnabled && !dnsServerRunning) {
+                startDnsServer();
+            } else if (!sysConfig.dnsServerEnabled && dnsServerRunning) {
+                stopDnsServer();
+            }
+        }
+
         server.send(200, "text/plain", "Config saved");
     } else {
         JsonDocument doc;
         doc["rndisEnabled"] = sysConfig.rndisEnabled;
         doc["adblockEnabled"] = sysConfig.adblockEnabled;
+        doc["dnsServerEnabled"] = sysConfig.dnsServerEnabled;
         doc["activePortal"] = sysConfig.activePortal;
-        doc["dnsServer"] = sysConfig.dnsServer;
+        doc["dnsUpstream"] = sysConfig.dnsUpstream;
         doc["bloomFilterLoaded"] = bloomFilterLoaded;
+        doc["dnsServerRunning"] = dnsServerRunning;
+        doc["dnsBlockedCount"] = dnsBlockedCount;
+        doc["dnsForwardedCount"] = dnsForwardedCount;
+
+        // Browser settings
+        doc["browserTimeout"] = sysConfig.browserTimeout;
+        doc["browserMaxSize"] = sysConfig.browserMaxSize;
+        doc["browserStripImages"] = sysConfig.browserStripImages;
+        doc["browserStripForms"] = sysConfig.browserStripForms;
+        doc["browserUserAgent"] = sysConfig.browserUserAgent;
 
         String jsonString;
         serializeJson(doc, jsonString);
@@ -2928,6 +3026,7 @@ void handleBrowser() {
             <button onclick="searchDDG()">🦆 DuckDuckGo</button>
             <button onclick="goBack()">← Back</button>
             <button onclick="goForward()">→ Forward</button>
+            <button onclick="window.location='/browser/settings'">⚙️ Settings</button>
         </div>
 
         <div class="info-bar">
@@ -3248,14 +3347,30 @@ void handleProxyFetch() {
         url = "https://" + url;
     }
 
+    // Check blocklist if enabled
+    if (sysConfig.adblockEnabled && bloomFilterLoaded) {
+        String domain = url;
+        if (domain.startsWith("https://")) domain = domain.substring(8);
+        else if (domain.startsWith("http://")) domain = domain.substring(7);
+        int pathIdx = domain.indexOf('/');
+        if (pathIdx > 0) domain = domain.substring(0, pathIdx);
+
+        if (checkBloomFilter(domain)) {
+            server.send(403, "text/html", "<html><body style='font-family:Arial;text-align:center;padding:50px;'><h1>Blocked</h1><p>This domain is on the blocklist.</p><p>" + domain + "</p></body></html>");
+            return;
+        }
+    }
+
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(15000);
+    client.setTimeout(sysConfig.browserTimeout);
 
     HTTPClient http;
     http.begin(client, url);
-    http.addHeader("User-Agent", "Mozilla/5.0 (compatible; ESP32-SecureBrowser/1.0)");
-    http.setTimeout(15000);
+    http.addHeader("User-Agent", sysConfig.browserUserAgent);
+    http.addHeader("Accept", "text/html,application/xhtml+xml");
+    http.addHeader("Accept-Language", "en-US,en;q=0.9");
+    http.setTimeout(sysConfig.browserTimeout);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
     int httpCode = http.GET();
@@ -3264,9 +3379,9 @@ void handleProxyFetch() {
         if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) {
             String payload = http.getString();
 
-            // Limit response size to avoid memory issues
-            if (payload.length() > 100000) {
-                payload = payload.substring(0, 100000) + "\n\n[Content truncated - page too large]";
+            // Limit response size based on settings
+            if (payload.length() > (unsigned int)sysConfig.browserMaxSize) {
+                payload = payload.substring(0, sysConfig.browserMaxSize) + "\n\n<p style='color:orange;'>[Content truncated - page too large (" + String(payload.length()) + " bytes)]</p>";
             }
 
             // Sanitize and rewrite links
@@ -3284,4 +3399,632 @@ void handleProxyFetch() {
     http.end();
 }
 
-#endif
+// ============================================================================
+// Browser Settings Page
+// ============================================================================
+void handleBrowserSettings() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    if (server.method() == HTTP_POST) {
+        JsonDocument doc;
+        if (deserializeJson(doc, server.arg("plain"))) {
+            server.send(400, "text/plain", "Invalid JSON");
+            return;
+        }
+
+        if (doc.containsKey("browserTimeout")) sysConfig.browserTimeout = doc["browserTimeout"];
+        if (doc.containsKey("browserMaxSize")) sysConfig.browserMaxSize = doc["browserMaxSize"];
+        if (doc.containsKey("browserStripImages")) sysConfig.browserStripImages = doc["browserStripImages"];
+        if (doc.containsKey("browserStripForms")) sysConfig.browserStripForms = doc["browserStripForms"];
+        if (doc.containsKey("browserUserAgent")) sysConfig.browserUserAgent = doc["browserUserAgent"].as<String>();
+
+        saveSystemConfig();
+        server.send(200, "text/plain", "Settings saved");
+        return;
+    }
+
+    // GET - return settings page
+    String html = R"WEBUI(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser Settings - ESP32</title>
+    <style>
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);padding:20px}
+        .container{max-width:600px;margin:auto}
+        header{background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:20px;border-radius:12px;display:flex;align-items:center;gap:15px}
+        header a{color:var(--text);text-decoration:none;font-size:1.5rem}
+        header h1{font-size:1.3rem}
+        .card{background:var(--card);border-radius:12px;padding:25px;box-shadow:0 4px 20px rgba(0,0,0,.3)}
+        .form-group{margin-bottom:20px}
+        label{display:block;margin-bottom:8px;font-weight:600;color:var(--dim)}
+        input[type="text"],input[type="number"]{width:100%;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:1rem}
+        input:focus{outline:none;border-color:var(--accent)}
+        .checkbox-group{display:flex;align-items:center;gap:10px}
+        .checkbox-group input{width:20px;height:20px}
+        button{width:100%;padding:14px;border-radius:8px;border:none;background:var(--success);color:#fff;font-weight:600;font-size:1rem;cursor:pointer;margin-top:10px}
+        button:hover{opacity:0.9}
+        .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999}
+        .toast.success{background:var(--success)}
+        .toast.error{background:#ff6b6b}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <a href="/browser">← Back</a>
+            <h1>Browser Settings</h1>
+        </header>
+        <div class="card">
+            <div class="form-group">
+                <label>Request Timeout (ms)</label>
+                <input type="number" id="browserTimeout" min="1000" max="30000" step="1000">
+            </div>
+            <div class="form-group">
+                <label>Max Response Size (bytes)</label>
+                <input type="number" id="browserMaxSize" min="10000" max="200000" step="10000">
+            </div>
+            <div class="form-group">
+                <label>User Agent</label>
+                <input type="text" id="browserUserAgent">
+            </div>
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="browserStripImages">
+                <label for="browserStripImages" style="margin:0">Strip Images (replace with placeholders)</label>
+            </div>
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="browserStripForms">
+                <label for="browserStripForms" style="margin:0">Strip Forms (remove form elements)</label>
+            </div>
+            <button onclick="saveSettings()">Save Settings</button>
+        </div>
+    </div>
+    <script>
+        function showToast(msg, type) {
+            const t = document.createElement('div');
+            t.className = 'toast ' + type;
+            t.textContent = msg;
+            document.body.appendChild(t);
+            setTimeout(() => t.remove(), 3000);
+        }
+
+        function loadSettings() {
+            fetch('/api/system/config')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('browserTimeout').value = data.browserTimeout;
+                    document.getElementById('browserMaxSize').value = data.browserMaxSize;
+                    document.getElementById('browserUserAgent').value = data.browserUserAgent;
+                    document.getElementById('browserStripImages').checked = data.browserStripImages;
+                    document.getElementById('browserStripForms').checked = data.browserStripForms;
+                });
+        }
+
+        function saveSettings() {
+            const data = {
+                browserTimeout: parseInt(document.getElementById('browserTimeout').value),
+                browserMaxSize: parseInt(document.getElementById('browserMaxSize').value),
+                browserUserAgent: document.getElementById('browserUserAgent').value,
+                browserStripImages: document.getElementById('browserStripImages').checked,
+                browserStripForms: document.getElementById('browserStripForms').checked
+            };
+            fetch('/browser/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            })
+            .then(r => r.ok ? showToast('Settings saved!', 'success') : showToast('Save failed', 'error'))
+            .catch(e => showToast('Error: ' + e, 'error'));
+        }
+
+        window.onload = loadSettings;
+    </script>
+</body>
+</html>
+)WEBUI";
+    server.send(200, "text/html", html);
+}
+
+// ============================================================================
+// DNS Server Implementation (Pi-Hole Style)
+// ============================================================================
+void startDnsServer() {
+    if (dnsServerRunning) return;
+
+    if (dnsUdp.begin(DNS_PORT)) {
+        dnsServerRunning = true;
+        Serial.println("DNS Server started on port 53");
+    } else {
+        Serial.println("Failed to start DNS server");
+    }
+}
+
+void stopDnsServer() {
+    if (!dnsServerRunning) return;
+
+    dnsUdp.stop();
+    dnsServerRunning = false;
+    Serial.println("DNS Server stopped");
+}
+
+String extractDomainFromDns(uint8_t* buffer, int len) {
+    if (len < 12) return "";
+
+    String domain = "";
+    int pos = 12; // Skip DNS header
+
+    while (pos < len && buffer[pos] != 0) {
+        int labelLen = buffer[pos];
+        if (labelLen > 63 || pos + labelLen >= len) break;
+
+        if (domain.length() > 0) domain += ".";
+        for (int i = 1; i <= labelLen && pos + i < len; i++) {
+            domain += (char)buffer[pos + i];
+        }
+        pos += labelLen + 1;
+    }
+
+    return domain;
+}
+
+void sendDnsResponse(IPAddress &clientIP, uint16_t clientPort, uint8_t* buffer, int len, bool blocked) {
+    if (len < 12) return;
+
+    // Build response
+    uint8_t response[512];
+    memcpy(response, buffer, len);
+
+    // Set response flags
+    response[2] = 0x81; // QR=1, Opcode=0, AA=0, TC=0, RD=1
+    response[3] = blocked ? 0x83 : 0x80; // RA=1, RCODE=3 (NXDOMAIN) if blocked, else 0
+
+    if (blocked) {
+        // NXDOMAIN - no answers
+        response[6] = 0; response[7] = 0; // ANCOUNT = 0
+    }
+
+    dnsUdp.beginPacket(clientIP, clientPort);
+    dnsUdp.write(response, len);
+    dnsUdp.endPacket();
+}
+
+void handleDnsRequest() {
+    int packetSize = dnsUdp.parsePacket();
+    if (packetSize == 0) return;
+
+    uint8_t buffer[512];
+    int len = dnsUdp.read(buffer, sizeof(buffer));
+    if (len < 12) return;
+
+    IPAddress clientIP = dnsUdp.remoteIP();
+    uint16_t clientPort = dnsUdp.remotePort();
+
+    String domain = extractDomainFromDns(buffer, len);
+    domain.toLowerCase();
+
+    if (domain.length() == 0) return;
+
+    // Check blocklist
+    bool blocked = false;
+    if (sysConfig.adblockEnabled && bloomFilterLoaded) {
+        blocked = checkBloomFilter(domain);
+    }
+
+    if (blocked) {
+        dnsBlockedCount++;
+        Serial.print("DNS BLOCKED: ");
+        Serial.println(domain);
+        sendDnsResponse(clientIP, clientPort, buffer, len, true);
+    } else {
+        dnsForwardedCount++;
+
+        // Forward to upstream DNS
+        WiFiUDP forwardUdp;
+        IPAddress upstreamIP;
+
+        if (WiFi.hostByName(sysConfig.dnsUpstream.c_str(), upstreamIP)) {
+            forwardUdp.begin(0);
+            forwardUdp.beginPacket(upstreamIP, 53);
+            forwardUdp.write(buffer, len);
+            forwardUdp.endPacket();
+
+            // Wait for response
+            unsigned long start = millis();
+            while (millis() - start < 2000) {
+                int respSize = forwardUdp.parsePacket();
+                if (respSize > 0) {
+                    uint8_t respBuffer[512];
+                    int respLen = forwardUdp.read(respBuffer, sizeof(respBuffer));
+
+                    dnsUdp.beginPacket(clientIP, clientPort);
+                    dnsUdp.write(respBuffer, respLen);
+                    dnsUdp.endPacket();
+                    break;
+                }
+                delay(10);
+            }
+            forwardUdp.stop();
+        }
+    }
+}
+
+void handleApiDnsStats() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    JsonDocument doc;
+    doc["dnsServerEnabled"] = sysConfig.dnsServerEnabled;
+    doc["dnsServerRunning"] = dnsServerRunning;
+    doc["blockedCount"] = dnsBlockedCount;
+    doc["forwardedCount"] = dnsForwardedCount;
+    doc["bloomFilterLoaded"] = bloomFilterLoaded;
+    doc["upstreamDns"] = sysConfig.dnsUpstream;
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+    server.send(200, "application/json", jsonString);
+}
+
+// ============================================================================
+// Blocklist Editor
+// ============================================================================
+void handleBlocklistEditor() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    String html = R"WEBUI(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blocklist Editor - ESP32</title>
+    <style>
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--danger:#ff6b6b;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
+        *{box-sizing:border-box;margin:0;padding:0}
+        html,body{height:100%;margin:0;padding:0;overflow:hidden}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
+        .page-wrapper{display:flex;flex-direction:column;height:100vh;padding:15px}
+        header{flex-shrink:0;background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:15px;border-radius:12px;display:flex;align-items:center;gap:15px}
+        header a{color:var(--text);text-decoration:none;font-size:1.5rem}
+        header h1{font-size:1.3rem}
+        .stats-bar{display:flex;gap:15px;margin-bottom:15px;flex-wrap:wrap}
+        .stat-card{background:var(--card);padding:15px 20px;border-radius:8px;flex:1;min-width:150px}
+        .stat-label{color:var(--dim);font-size:0.8rem}
+        .stat-value{font-size:1.5rem;font-weight:bold}
+        .stat-value.blocked{color:var(--danger)}
+        .stat-value.forwarded{color:var(--success)}
+        .content-container{display:flex;gap:15px;flex-grow:1;min-height:0}
+        .sidebar{flex:0 0 250px;background:var(--card);padding:15px;border-radius:12px;overflow-y:auto;display:flex;flex-direction:column}
+        .sidebar h3{color:var(--accent);margin-bottom:15px;font-size:1rem;border-bottom:2px solid var(--accent);padding-bottom:10px}
+        .file-list{flex-grow:1;overflow-y:auto}
+        .file-item{display:flex;align-items:center;padding:10px;margin-bottom:5px;background:var(--bg);border-radius:8px;cursor:pointer;transition:all .2s}
+        .file-item:hover{background:var(--secondary)}
+        .file-item.selected{border:2px solid var(--accent)}
+        .main-content{flex-grow:1;display:flex;flex-direction:column;min-width:0}
+        .toolbar{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+        .toolbar input{flex:1;min-width:150px;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)}
+        .toolbar button{padding:10px 15px;border-radius:8px;border:none;cursor:pointer;font-weight:600;background:var(--secondary);color:var(--text);transition:all .2s}
+        .toolbar button:hover{background:var(--accent)}
+        .toolbar button.success{background:var(--success)}
+        .toolbar button.danger{background:var(--danger)}
+        #editor{flex:1;width:100%;padding:15px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-family:'Fira Code',monospace;font-size:13px;resize:none;line-height:1.4}
+        .help-text{padding:10px;background:var(--secondary);border-radius:8px;margin-top:10px;font-size:0.85rem;color:var(--dim)}
+        .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999}
+        .toast.success{background:var(--success)}
+        .toast.error{background:var(--danger)}
+        @media(max-width:768px){.content-container{flex-direction:column}.sidebar{flex:0 0 auto;max-height:150px}}
+    </style>
+</head>
+<body>
+    <div class="page-wrapper">
+        <header>
+            <a href="/">← Back</a>
+            <h1>Blocklist Editor (Pi-Hole Style DNS)</h1>
+        </header>
+
+        <div class="stats-bar">
+            <div class="stat-card">
+                <div class="stat-label">Blocked Requests</div>
+                <div class="stat-value blocked" id="blockedCount">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Forwarded Requests</div>
+                <div class="stat-value forwarded" id="forwardedCount">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">DNS Server</div>
+                <div class="stat-value" id="dnsStatus">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Bloom Filter</div>
+                <div class="stat-value" id="bloomStatus">--</div>
+            </div>
+        </div>
+
+        <div class="content-container">
+            <div class="sidebar">
+                <h3>Blocklist Files</h3>
+                <div class="file-list" id="fileList"></div>
+                <div style="margin-top:15px">
+                    <input type="text" id="newFileName" placeholder="new_blocklist.txt" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                    <button onclick="createFile()" style="width:100%;padding:10px;border-radius:8px;border:none;background:var(--success);color:#fff;cursor:pointer;font-weight:600">+ Create New</button>
+                </div>
+            </div>
+
+            <div class="main-content">
+                <div class="toolbar">
+                    <input type="text" id="currentFile" placeholder="Select a blocklist file..." readonly>
+                    <button class="success" onclick="saveFile()">Save</button>
+                    <button class="danger" onclick="deleteFile()">Delete</button>
+                    <button onclick="reloadBloom()">Reload Bloom Filter</button>
+                </div>
+                <textarea id="editor" placeholder="# Blocklist format (hosts file style):
+# Lines starting with # are comments
+# Format: 0.0.0.0 domain.com
+# or just: domain.com
+
+0.0.0.0 ads.example.com
+0.0.0.0 tracking.example.com
+analytics.badsite.com"></textarea>
+                <div class="help-text">
+                    <strong>Format:</strong> Use hosts file format (0.0.0.0 domain.com) or plain domain names. Lines starting with # are ignored.
+                    After editing, click "Reload Bloom Filter" to apply changes.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentFileName = '';
+
+        function showToast(msg, type) {
+            const t = document.createElement('div');
+            t.className = 'toast ' + type;
+            t.textContent = msg;
+            document.body.appendChild(t);
+            setTimeout(() => t.remove(), 3000);
+        }
+
+        function loadStats() {
+            fetch('/api/dns/stats')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('blockedCount').textContent = data.blockedCount;
+                    document.getElementById('forwardedCount').textContent = data.forwardedCount;
+                    document.getElementById('dnsStatus').textContent = data.dnsServerRunning ? 'Running' : 'Stopped';
+                    document.getElementById('dnsStatus').style.color = data.dnsServerRunning ? 'var(--success)' : 'var(--danger)';
+                    document.getElementById('bloomStatus').textContent = data.bloomFilterLoaded ? 'Loaded' : 'Empty';
+                    document.getElementById('bloomStatus').style.color = data.bloomFilterLoaded ? 'var(--success)' : 'var(--dim)';
+                });
+        }
+
+        function loadFileList() {
+            fetch('/api/blocklist/list')
+                .then(r => r.json())
+                .then(files => {
+                    const list = document.getElementById('fileList');
+                    list.innerHTML = '';
+                    files.forEach(file => {
+                        const div = document.createElement('div');
+                        div.className = 'file-item' + (file === currentFileName ? ' selected' : '');
+                        div.textContent = file;
+                        div.onclick = () => loadFile(file);
+                        list.appendChild(div);
+                    });
+                });
+        }
+
+        function loadFile(filename) {
+            fetch('/api/blocklist/load?file=' + encodeURIComponent(filename))
+                .then(r => r.ok ? r.text() : Promise.reject('File not found'))
+                .then(content => {
+                    currentFileName = filename;
+                    document.getElementById('currentFile').value = filename;
+                    document.getElementById('editor').value = content;
+                    loadFileList();
+                })
+                .catch(e => showToast('Error: ' + e, 'error'));
+        }
+
+        function saveFile() {
+            if (!currentFileName) {
+                showToast('No file selected', 'error');
+                return;
+            }
+            fetch('/api/blocklist/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: currentFileName, content: document.getElementById('editor').value})
+            })
+            .then(r => r.ok ? showToast('Saved!', 'success') : showToast('Save failed', 'error'))
+            .catch(e => showToast('Error: ' + e, 'error'));
+        }
+
+        function createFile() {
+            let filename = document.getElementById('newFileName').value.trim();
+            if (!filename) {
+                showToast('Enter a filename', 'error');
+                return;
+            }
+            if (!filename.endsWith('.txt')) filename += '.txt';
+
+            fetch('/api/blocklist/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: filename, content: '# Blocklist\n# Add domains to block below\n'})
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast('File created!', 'success');
+                    document.getElementById('newFileName').value = '';
+                    loadFileList();
+                    loadFile(filename);
+                } else {
+                    showToast('Create failed', 'error');
+                }
+            });
+        }
+
+        function deleteFile() {
+            if (!currentFileName) {
+                showToast('No file selected', 'error');
+                return;
+            }
+            if (!confirm('Delete "' + currentFileName + '"?')) return;
+
+            fetch('/api/blocklist/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: currentFileName})
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast('Deleted', 'success');
+                    currentFileName = '';
+                    document.getElementById('currentFile').value = '';
+                    document.getElementById('editor').value = '';
+                    loadFileList();
+                } else {
+                    showToast('Delete failed', 'error');
+                }
+            });
+        }
+
+        function reloadBloom() {
+            fetch('/api/blocklist/reload', {method: 'POST'})
+                .then(r => r.ok ? showToast('Bloom filter reloaded!', 'success') : showToast('Reload failed', 'error'))
+                .then(() => loadStats());
+        }
+
+        setInterval(loadStats, 5000);
+        window.onload = () => { loadFileList(); loadStats(); };
+    </script>
+</body>
+</html>
+)WEBUI";
+    server.send(200, "text/html", html);
+}
+
+void handleApiBlocklistList() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    File dir = SD.open("/blocklists");
+    if (!dir) {
+        server.send(200, "application/json", "[]");
+        return;
+    }
+
+    String json = "[";
+    bool first = true;
+    File entry = dir.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory()) {
+            String name = String(entry.name());
+            name = name.substring(name.lastIndexOf('/') + 1);
+            if (!first) json += ",";
+            json += "\"" + name + "\"";
+            first = false;
+        }
+        entry.close();
+        entry = dir.openNextFile();
+    }
+    json += "]";
+    dir.close();
+
+    server.send(200, "application/json", json);
+}
+
+void handleApiBlocklistLoad() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    if (!server.hasArg("file")) {
+        server.send(400, "text/plain", "Missing file parameter");
+        return;
+    }
+
+    String filename = server.arg("file");
+    if (filename.indexOf("..") != -1 || filename.indexOf("/") != -1) {
+        server.send(403, "text/plain", "Invalid filename");
+        return;
+    }
+
+    String path = "/blocklists/" + filename;
+    File file = SD.open(path);
+    if (!file) {
+        server.send(404, "text/plain", "File not found");
+        return;
+    }
+
+    server.streamFile(file, "text/plain");
+    file.close();
+}
+
+void handleApiBlocklistSave() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    JsonDocument doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+
+    String filename = doc["filename"] | "";
+    String content = doc["content"] | "";
+
+    if (filename.length() == 0 || filename.indexOf("..") != -1 || filename.indexOf("/") != -1) {
+        server.send(400, "text/plain", "Invalid filename");
+        return;
+    }
+
+    String path = "/blocklists/" + filename;
+    File file = SD.open(path, FILE_WRITE);
+    if (!file) {
+        server.send(500, "text/plain", "Cannot create file");
+        return;
+    }
+
+    file.print(content);
+    file.close();
+    server.send(200, "text/plain", "Saved");
+}
+
+void handleApiBlocklistDelete() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    JsonDocument doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+
+    String filename = doc["filename"] | "";
+    if (filename.length() == 0 || filename.indexOf("..") != -1 || filename.indexOf("/") != -1) {
+        server.send(400, "text/plain", "Invalid filename");
+        return;
+    }
+
+    String path = "/blocklists/" + filename;
+    if (SD.remove(path)) {
+        server.send(200, "text/plain", "Deleted");
+    } else {
+        server.send(500, "text/plain", "Delete failed");
+    }
+}
+
+void handleApiBlocklistReload() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    initBloomFilter();
+    server.send(200, "text/plain", "Bloom filter reloaded");
+}
