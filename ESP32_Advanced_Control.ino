@@ -84,7 +84,7 @@ struct SystemConfig {
 
     // Secure Browser Settings
     int browserTimeout = 15000;          // HTTP timeout in ms
-    int browserMaxSize = 100000;         // Max response size in bytes
+    int browserMaxSize = 250000;         // Max response size in bytes (250KB)
     String browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
     // Fine-grained sanitization controls
@@ -3122,6 +3122,90 @@ void handleBrowser() {
                         target = target.parentNode;
                     }
                 }, true);
+
+                // Intercept form submissions
+                doc.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const form = e.target;
+                    let action = form.getAttribute('action') || '';
+                    const method = (form.getAttribute('method') || 'GET').toUpperCase();
+
+                    // Resolve relative URLs
+                    if (action && !action.startsWith('http')) {
+                        const currentUrl = $('urlInput').value;
+                        if (action.startsWith('/')) {
+                            const urlObj = new URL(currentUrl);
+                            action = urlObj.origin + action;
+                        } else {
+                            action = currentUrl.substring(0, currentUrl.lastIndexOf('/') + 1) + action;
+                        }
+                    }
+                    if (!action) action = $('urlInput').value;
+
+                    // Collect form data
+                    const formData = new FormData(form);
+                    const params = new URLSearchParams();
+                    for (const [key, value] of formData.entries()) {
+                        params.append(key, value);
+                    }
+
+                    if (method === 'POST') {
+                        submitForm(action, params.toString());
+                    } else {
+                        // GET - append to URL
+                        const sep = action.includes('?') ? '&' : '?';
+                        fetchPage(action + sep + params.toString());
+                    }
+                    return false;
+                }, true);
+            }
+
+            function submitForm(url, postData) {
+                if (isNavigating) return;
+                isNavigating = true;
+
+                if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                    url = 'https://' + url;
+                }
+
+                $('urlInput').value = url;
+                $('currentUrl').textContent = url.length > 50 ? url.substring(0, 50) + '...' : url;
+                $('statusText').textContent = 'Submitting...';
+                $('pageTitle').textContent = 'Loading...';
+                setFrameContent('<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#666;font-family:sans-serif;">Submitting form...</div>');
+
+                const start = Date.now();
+
+                fetch('/proxy/fetch?url=' + encodeURIComponent(url), {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'postData=' + encodeURIComponent(postData) + '&contentType=application/x-www-form-urlencoded'
+                })
+                    .then(r => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    })
+                    .then(html => {
+                        $('loadTime').textContent = (Date.now() - start) + 'ms';
+                        $('statusText').textContent = 'Loaded';
+                        setFrameContent(html);
+
+                        // Add to history
+                        if (historyIdx < historyStack.length - 1) {
+                            historyStack.splice(historyIdx + 1);
+                        }
+                        historyStack.push(url);
+                        historyIdx = historyStack.length - 1;
+
+                        isNavigating = false;
+                    })
+                    .catch(e => {
+                        $('statusText').textContent = 'Error';
+                        $('loadTime').textContent = '-';
+                        setFrameContent('<div style="background:#ffebee;color:#c62828;padding:20px;font-family:sans-serif;border-radius:8px;margin:20px;"><h3>Form submission failed</h3><p>' + e.message + '</p><p>URL: ' + url + '</p></div>');
+                        isNavigating = false;
+                    });
             }
 
             function fetchPage(url, addToHistory = true) {
@@ -3467,7 +3551,17 @@ void handleProxyFetch() {
     http.setTimeout(sysConfig.browserTimeout);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-    int httpCode = http.GET();
+    int httpCode;
+
+    // Check if this is a POST request with form data
+    if (server.method() == HTTP_POST && server.hasArg("postData")) {
+        String postData = server.arg("postData");
+        String contentType = server.hasArg("contentType") ? server.arg("contentType") : "application/x-www-form-urlencoded";
+        http.addHeader("Content-Type", contentType);
+        httpCode = http.POST(postData);
+    } else {
+        httpCode = http.GET();
+    }
 
     if (httpCode > 0) {
         // Accept all 2xx success codes, plus redirects (which are followed automatically)
