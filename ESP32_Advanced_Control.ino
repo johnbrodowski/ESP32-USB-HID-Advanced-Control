@@ -3015,52 +3015,41 @@ void handleBrowser() {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Browser - ESP32</title>
-    <base target="_self">
     <style>
         :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--danger:#ff6b6b;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
-        *{box-sizing:border-box;margin:0;padding:0}
-        html,body{height:100%;margin:0;padding:0;overflow:hidden}
+        html,body{height:100%;margin:0;padding:0;overflow:hidden;box-sizing:border-box}
         body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
-        .page-wrapper{display:flex;flex-direction:column;height:100vh;padding:15px}
-        header{flex-shrink:0;background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:15px;border-radius:12px;display:flex;align-items:center;gap:15px}
-        header a.back-link{color:var(--text);text-decoration:none;font-size:1.5rem}
-        header h1{font-size:1.3rem}
-        .toolbar{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
-        .toolbar input{flex:1;min-width:200px;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:1rem}
-        .toolbar input:focus{outline:none;border-color:var(--accent)}
-        .toolbar button{padding:10px 16px;border-radius:8px;border:none;cursor:pointer;font-weight:600;background:var(--secondary);color:var(--text);transition:all .2s;white-space:nowrap}
-        .toolbar button:hover{background:var(--accent)}
-        .toolbar button.primary{background:var(--success)}
-        .info-bar{display:flex;gap:15px;margin-bottom:10px;padding:8px 15px;background:var(--card);border-radius:8px;font-size:0.85rem;flex-wrap:wrap;align-items:center}
-        .info-item{display:flex;align-items:center;gap:5px}
-        .info-item .label{color:var(--dim)}
-        .content-area{flex-grow:1;background:#fff;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
-        .content-header{padding:8px 15px;background:var(--secondary);font-weight:600;display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
-        #pageContent{flex:1;overflow-y:auto;padding:20px;color:#333;font-family:Georgia,serif;line-height:1.7;font-size:16px}
-        #pageContent a{color:#0066cc;text-decoration:underline;cursor:pointer}
-        #pageContent a:hover{color:#004499}
-        #pageContent h1,#pageContent h2,#pageContent h3,#pageContent h4{color:#222;margin:20px 0 10px 0}
-        #pageContent p{margin:10px 0}
-        #pageContent img{max-width:100%;height:auto}
-        #pageContent table{border-collapse:collapse;width:100%;margin:10px 0}
-        #pageContent td,#pageContent th{border:1px solid #ddd;padding:8px}
-        .loading{text-align:center;padding:40px;color:#666}
-        .error{background:#ffebee;color:#c62828;padding:20px;border-radius:8px;margin:20px}
-        .toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:8px;color:#fff;font-weight:600;z-index:9999;animation:slideIn .3s}
-        .toast.success{background:var(--success)}
-        .toast.error{background:var(--danger)}
-        @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
-        @media(max-width:768px){.toolbar{flex-direction:column}.toolbar input,.toolbar button{width:100%}}
+        .browser-wrapper{display:flex;flex-direction:column;height:100vh;padding:15px;box-sizing:border-box}
+        .browser-header{flex-shrink:0;background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:15px;border-radius:12px;display:flex;align-items:center;gap:15px}
+        .browser-header a{color:var(--text);text-decoration:none;font-size:1.5rem}
+        .browser-header h1{font-size:1.3rem;margin:0}
+        .browser-toolbar{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+        .browser-toolbar input{flex:1;min-width:200px;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:1rem;box-sizing:border-box}
+        .browser-toolbar input:focus{outline:none;border-color:var(--accent)}
+        .browser-toolbar button{padding:10px 16px;border-radius:8px;border:none;cursor:pointer;font-weight:600;background:var(--secondary);color:var(--text);transition:all .2s;white-space:nowrap}
+        .browser-toolbar button:hover{background:var(--accent)}
+        .browser-toolbar button.primary{background:var(--success)}
+        .browser-info{display:flex;gap:15px;margin-bottom:10px;padding:8px 15px;background:var(--card);border-radius:8px;font-size:0.85rem;flex-wrap:wrap;align-items:center}
+        .browser-info .label{color:var(--dim)}
+        .browser-content{flex-grow:1;background:#fff;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+        .browser-content-header{padding:8px 15px;background:var(--secondary);font-weight:600;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;color:var(--text)}
+        #contentFrame{flex:1;border:none;width:100%;background:#fff}
+        .browser-loading{display:flex;align-items:center;justify-content:center;height:100%;color:#666;font-size:1.1rem}
+        .browser-toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:8px;color:#fff;font-weight:600;z-index:9999;animation:toastIn .3s}
+        .browser-toast.success{background:var(--success)}
+        .browser-toast.error{background:var(--danger)}
+        @keyframes toastIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+        @media(max-width:768px){.browser-toolbar{flex-direction:column}.browser-toolbar input,.browser-toolbar button{width:100%}}
     </style>
 </head>
 <body>
-    <div class="page-wrapper">
-        <header>
-            <a href="/" class="back-link">←</a>
+    <div class="browser-wrapper">
+        <div class="browser-header">
+            <a href="/">←</a>
             <h1>Secure Browser</h1>
-        </header>
+        </div>
 
-        <div class="toolbar">
+        <div class="browser-toolbar">
             <input type="text" id="urlInput" placeholder="Enter URL or search term..." autocomplete="off">
             <button class="primary" id="goBtn">Go</button>
             <button id="ddgBtn">DuckDuckGo</button>
@@ -3069,23 +3058,17 @@ void handleBrowser() {
             <button id="settingsBtn">Settings</button>
         </div>
 
-        <div class="info-bar">
-            <div class="info-item"><span class="label">URL:</span> <span id="currentUrl">-</span></div>
-            <div class="info-item"><span class="label">Status:</span> <span id="statusText">Ready</span></div>
-            <div class="info-item"><span class="label">Time:</span> <span id="loadTime">-</span></div>
+        <div class="browser-info">
+            <span><span class="label">URL:</span> <span id="currentUrl">-</span></span>
+            <span><span class="label">Status:</span> <span id="statusText">Ready</span></span>
+            <span><span class="label">Time:</span> <span id="loadTime">-</span></span>
         </div>
 
-        <div class="content-area">
-            <div class="content-header">
+        <div class="browser-content">
+            <div class="browser-content-header">
                 <span id="pageTitle">Page Content</span>
             </div>
-            <div id="pageContent">
-                <div style="text-align:center;padding:40px;color:#666">
-                    <h2>Secure Browser</h2>
-                    <p>Enter a URL above or search with DuckDuckGo.</p>
-                    <p>Content is sanitized based on your settings.</p>
-                </div>
-            </div>
+            <iframe id="contentFrame" sandbox="allow-same-origin"></iframe>
         </div>
     </div>
 
@@ -3099,10 +3082,46 @@ void handleBrowser() {
 
             function showToast(msg, type) {
                 const t = document.createElement('div');
-                t.className = 'toast ' + type;
+                t.className = 'browser-toast ' + type;
                 t.textContent = msg;
                 document.body.appendChild(t);
                 setTimeout(() => t.remove(), 3000);
+            }
+
+            function setFrameContent(html) {
+                const frame = $('contentFrame');
+                const doc = frame.contentDocument || frame.contentWindow.document;
+                doc.open();
+                doc.write(html);
+                doc.close();
+
+                // Extract title
+                const titleEl = doc.querySelector('title');
+                if (titleEl) {
+                    $('pageTitle').textContent = titleEl.textContent.substring(0, 60);
+                }
+
+                // Attach click handler to intercept links inside iframe
+                doc.addEventListener('click', function(e) {
+                    let target = e.target;
+                    while (target && target.tagName !== 'HTML') {
+                        if (target.tagName === 'A') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            let href = target.getAttribute('data-href') || target.getAttribute('href');
+                            if (href) {
+                                if (href.startsWith('/proxy/fetch?url=')) {
+                                    href = decodeURIComponent(href.replace('/proxy/fetch?url=', ''));
+                                }
+                                if (!href.startsWith('javascript:') && !href.startsWith('#') && !href.startsWith('mailto:')) {
+                                    fetchPage(href);
+                                }
+                            }
+                            return false;
+                        }
+                        target = target.parentNode;
+                    }
+                }, true);
             }
 
             function fetchPage(url, addToHistory = true) {
@@ -3116,7 +3135,8 @@ void handleBrowser() {
                 $('urlInput').value = url;
                 $('currentUrl').textContent = url.length > 50 ? url.substring(0, 50) + '...' : url;
                 $('statusText').textContent = 'Loading...';
-                $('pageContent').innerHTML = '<div class="loading">Fetching content...</div>';
+                $('pageTitle').textContent = 'Loading...';
+                setFrameContent('<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#666;font-family:sans-serif;">Fetching content...</div>');
 
                 const start = Date.now();
 
@@ -3128,10 +3148,7 @@ void handleBrowser() {
                     .then(html => {
                         $('loadTime').textContent = (Date.now() - start) + 'ms';
                         $('statusText').textContent = 'Loaded';
-                        $('pageContent').innerHTML = html;
-
-                        const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-                        $('pageTitle').textContent = titleMatch ? titleMatch[1].substring(0, 60) : 'Page';
+                        setFrameContent(html);
 
                         if (addToHistory) {
                             if (historyIdx < historyStack.length - 1) {
@@ -3146,32 +3163,10 @@ void handleBrowser() {
                     .catch(e => {
                         $('statusText').textContent = 'Error';
                         $('loadTime').textContent = '-';
-                        $('pageContent').innerHTML = '<div class="error"><h3>Failed to load</h3><p>' + e.message + '</p><p>URL: ' + url + '</p></div>';
+                        setFrameContent('<div style="background:#ffebee;color:#c62828;padding:20px;font-family:sans-serif;border-radius:8px;margin:20px;"><h3>Failed to load</h3><p>' + e.message + '</p><p>URL: ' + url + '</p></div>');
                         isNavigating = false;
                     });
             }
-
-            // Event delegation for all clicks in page content
-            $('pageContent').addEventListener('click', function(e) {
-                let target = e.target;
-                while (target && target !== this) {
-                    if (target.tagName === 'A') {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        let href = target.getAttribute('data-href') || target.getAttribute('href');
-                        if (href) {
-                            if (href.startsWith('/proxy/fetch?url=')) {
-                                href = decodeURIComponent(href.replace('/proxy/fetch?url=', ''));
-                            }
-                            if (!href.startsWith('javascript:') && !href.startsWith('#') && !href.startsWith('mailto:')) {
-                                fetchPage(href);
-                            }
-                        }
-                        return false;
-                    }
-                    target = target.parentNode;
-                }
-            }, true);
 
             $('goBtn').addEventListener('click', function() {
                 const url = $('urlInput').value.trim();
@@ -3475,7 +3470,8 @@ void handleProxyFetch() {
     int httpCode = http.GET();
 
     if (httpCode > 0) {
-        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) {
+        // Accept all 2xx success codes, plus redirects (which are followed automatically)
+        if ((httpCode >= 200 && httpCode < 300) || httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) {
             String payload = http.getString();
 
             // Limit response size based on settings
