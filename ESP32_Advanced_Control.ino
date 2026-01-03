@@ -83,11 +83,19 @@ struct SystemConfig {
     String dnsUpstream = "1.1.1.1";      // Upstream DNS server
 
     // Secure Browser Settings
-    int browserTimeout = 10000;          // HTTP timeout in ms
-    int browserMaxSize = 50000;          // Max response size in bytes
-    bool browserStripImages = true;      // Replace images with placeholders
-    bool browserStripForms = false;      // Remove form elements
-    String browserUserAgent = "Mozilla/5.0 (compatible; ESP32-SecureBrowser/1.0)";
+    int browserTimeout = 15000;          // HTTP timeout in ms
+    int browserMaxSize = 100000;         // Max response size in bytes
+    String browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+
+    // Fine-grained sanitization controls
+    bool stripScripts = true;            // Remove <script> tags
+    bool stripStyles = false;            // Remove <style> tags (keep CSS for readability)
+    bool stripIframes = true;            // Remove <iframe> tags
+    bool stripObjects = true;            // Remove <object>/<embed> tags
+    bool stripImages = false;            // Replace <img> with placeholders
+    bool stripForms = false;             // Remove <form> elements
+    bool stripEventHandlers = true;      // Remove onclick, onload, etc.
+    bool stripExternalResources = false; // Remove external CSS/JS links
 };
 
 SystemConfig sysConfig;
@@ -2368,11 +2376,19 @@ void loadSystemConfig() {
     // Browser settings
     sysConfig.browserTimeout = doc["browserTimeout"] | sysConfig.browserTimeout;
     sysConfig.browserMaxSize = doc["browserMaxSize"] | sysConfig.browserMaxSize;
-    sysConfig.browserStripImages = doc["browserStripImages"] | sysConfig.browserStripImages;
-    sysConfig.browserStripForms = doc["browserStripForms"] | sysConfig.browserStripForms;
     if (doc.containsKey("browserUserAgent")) {
         sysConfig.browserUserAgent = doc["browserUserAgent"].as<String>();
     }
+
+    // Fine-grained sanitization settings
+    sysConfig.stripScripts = doc["stripScripts"] | sysConfig.stripScripts;
+    sysConfig.stripStyles = doc["stripStyles"] | sysConfig.stripStyles;
+    sysConfig.stripIframes = doc["stripIframes"] | sysConfig.stripIframes;
+    sysConfig.stripObjects = doc["stripObjects"] | sysConfig.stripObjects;
+    sysConfig.stripImages = doc["stripImages"] | sysConfig.stripImages;
+    sysConfig.stripForms = doc["stripForms"] | sysConfig.stripForms;
+    sysConfig.stripEventHandlers = doc["stripEventHandlers"] | sysConfig.stripEventHandlers;
+    sysConfig.stripExternalResources = doc["stripExternalResources"] | sysConfig.stripExternalResources;
 
     file.close();
     Serial.println("System config loaded");
@@ -2395,9 +2411,17 @@ void saveSystemConfig() {
     // Browser settings
     doc["browserTimeout"] = sysConfig.browserTimeout;
     doc["browserMaxSize"] = sysConfig.browserMaxSize;
-    doc["browserStripImages"] = sysConfig.browserStripImages;
-    doc["browserStripForms"] = sysConfig.browserStripForms;
     doc["browserUserAgent"] = sysConfig.browserUserAgent;
+
+    // Fine-grained sanitization settings
+    doc["stripScripts"] = sysConfig.stripScripts;
+    doc["stripStyles"] = sysConfig.stripStyles;
+    doc["stripIframes"] = sysConfig.stripIframes;
+    doc["stripObjects"] = sysConfig.stripObjects;
+    doc["stripImages"] = sysConfig.stripImages;
+    doc["stripForms"] = sysConfig.stripForms;
+    doc["stripEventHandlers"] = sysConfig.stripEventHandlers;
+    doc["stripExternalResources"] = sysConfig.stripExternalResources;
 
     serializeJson(doc, file);
     file.close();
@@ -2920,9 +2944,17 @@ void handleApiSystemConfig() {
         // Browser settings
         if (doc.containsKey("browserTimeout")) sysConfig.browserTimeout = doc["browserTimeout"];
         if (doc.containsKey("browserMaxSize")) sysConfig.browserMaxSize = doc["browserMaxSize"];
-        if (doc.containsKey("browserStripImages")) sysConfig.browserStripImages = doc["browserStripImages"];
-        if (doc.containsKey("browserStripForms")) sysConfig.browserStripForms = doc["browserStripForms"];
         if (doc.containsKey("browserUserAgent")) sysConfig.browserUserAgent = doc["browserUserAgent"].as<String>();
+
+        // Fine-grained sanitization settings
+        if (doc.containsKey("stripScripts")) sysConfig.stripScripts = doc["stripScripts"];
+        if (doc.containsKey("stripStyles")) sysConfig.stripStyles = doc["stripStyles"];
+        if (doc.containsKey("stripIframes")) sysConfig.stripIframes = doc["stripIframes"];
+        if (doc.containsKey("stripObjects")) sysConfig.stripObjects = doc["stripObjects"];
+        if (doc.containsKey("stripImages")) sysConfig.stripImages = doc["stripImages"];
+        if (doc.containsKey("stripForms")) sysConfig.stripForms = doc["stripForms"];
+        if (doc.containsKey("stripEventHandlers")) sysConfig.stripEventHandlers = doc["stripEventHandlers"];
+        if (doc.containsKey("stripExternalResources")) sysConfig.stripExternalResources = doc["stripExternalResources"];
 
         saveSystemConfig();
 
@@ -2951,9 +2983,17 @@ void handleApiSystemConfig() {
         // Browser settings
         doc["browserTimeout"] = sysConfig.browserTimeout;
         doc["browserMaxSize"] = sysConfig.browserMaxSize;
-        doc["browserStripImages"] = sysConfig.browserStripImages;
-        doc["browserStripForms"] = sysConfig.browserStripForms;
         doc["browserUserAgent"] = sysConfig.browserUserAgent;
+
+        // Fine-grained sanitization settings
+        doc["stripScripts"] = sysConfig.stripScripts;
+        doc["stripStyles"] = sysConfig.stripStyles;
+        doc["stripIframes"] = sysConfig.stripIframes;
+        doc["stripObjects"] = sysConfig.stripObjects;
+        doc["stripImages"] = sysConfig.stripImages;
+        doc["stripForms"] = sysConfig.stripForms;
+        doc["stripEventHandlers"] = sysConfig.stripEventHandlers;
+        doc["stripExternalResources"] = sysConfig.stripExternalResources;
 
         String jsonString;
         serializeJson(doc, jsonString);
@@ -2975,7 +3015,7 @@ void handleBrowser() {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Browser - ESP32</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔒</text></svg>">
+    <base target="_self">
     <style>
         :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--danger:#ff6b6b;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
         *{box-sizing:border-box;margin:0;padding:0}
@@ -2983,32 +3023,32 @@ void handleBrowser() {
         body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
         .page-wrapper{display:flex;flex-direction:column;height:100vh;padding:15px}
         header{flex-shrink:0;background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:15px;border-radius:12px;display:flex;align-items:center;gap:15px}
-        header a{color:var(--text);text-decoration:none;font-size:1.5rem;transition:transform .2s}
-        header a:hover{transform:scale(1.1)}
+        header a.back-link{color:var(--text);text-decoration:none;font-size:1.5rem}
         header h1{font-size:1.3rem}
-        .toolbar{display:flex;gap:10px;margin-bottom:15px;flex-wrap:wrap}
+        .toolbar{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
         .toolbar input{flex:1;min-width:200px;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:1rem}
         .toolbar input:focus{outline:none;border-color:var(--accent)}
-        .toolbar button{padding:12px 20px;border-radius:8px;border:none;cursor:pointer;font-weight:600;background:var(--secondary);color:var(--text);transition:all .2s}
+        .toolbar button{padding:10px 16px;border-radius:8px;border:none;cursor:pointer;font-weight:600;background:var(--secondary);color:var(--text);transition:all .2s;white-space:nowrap}
         .toolbar button:hover{background:var(--accent)}
         .toolbar button.primary{background:var(--success)}
-        .info-bar{display:flex;gap:15px;margin-bottom:15px;padding:10px 15px;background:var(--card);border-radius:8px;font-size:0.9rem;flex-wrap:wrap}
+        .info-bar{display:flex;gap:15px;margin-bottom:10px;padding:8px 15px;background:var(--card);border-radius:8px;font-size:0.85rem;flex-wrap:wrap;align-items:center}
         .info-item{display:flex;align-items:center;gap:5px}
         .info-item .label{color:var(--dim)}
-        .content-area{flex-grow:1;background:var(--card);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
-        .content-header{padding:10px 15px;background:var(--secondary);font-weight:600;display:flex;justify-content:space-between;align-items:center}
-        #pageContent{flex:1;overflow-y:auto;padding:20px;background:#fff;color:#333;font-family:Georgia,serif;line-height:1.8}
+        .content-area{flex-grow:1;background:#fff;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+        .content-header{padding:8px 15px;background:var(--secondary);font-weight:600;display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+        #pageContent{flex:1;overflow-y:auto;padding:20px;color:#333;font-family:Georgia,serif;line-height:1.7;font-size:16px}
         #pageContent a{color:#0066cc;text-decoration:underline;cursor:pointer}
-        #pageContent a:hover{color:var(--accent)}
-        #pageContent h1,#pageContent h2,#pageContent h3{color:#222;margin:20px 0 10px 0}
+        #pageContent a:hover{color:#004499}
+        #pageContent h1,#pageContent h2,#pageContent h3,#pageContent h4{color:#222;margin:20px 0 10px 0}
         #pageContent p{margin:10px 0}
-        #pageContent .img-placeholder{background:#eee;padding:10px;border:1px dashed #ccc;color:#666;text-align:center;margin:10px 0}
-        .loading{text-align:center;padding:40px;color:var(--dim)}
+        #pageContent img{max-width:100%;height:auto}
+        #pageContent table{border-collapse:collapse;width:100%;margin:10px 0}
+        #pageContent td,#pageContent th{border:1px solid #ddd;padding:8px}
+        .loading{text-align:center;padding:40px;color:#666}
         .error{background:#ffebee;color:#c62828;padding:20px;border-radius:8px;margin:20px}
-        .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999;animation:slideIn .3s}
+        .toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:8px;color:#fff;font-weight:600;z-index:9999;animation:slideIn .3s}
         .toast.success{background:var(--success)}
         .toast.error{background:var(--danger)}
-        .toast.info{background:var(--secondary)}
         @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
         @media(max-width:768px){.toolbar{flex-direction:column}.toolbar input,.toolbar button{width:100%}}
     </style>
@@ -3016,135 +3056,162 @@ void handleBrowser() {
 <body>
     <div class="page-wrapper">
         <header>
-            <a href="/">← Back</a>
-            <h1>🔒 Secure Text-Only Browser</h1>
+            <a href="/" class="back-link">←</a>
+            <h1>Secure Browser</h1>
         </header>
 
         <div class="toolbar">
-            <input type="text" id="urlInput" placeholder="Enter URL (e.g., https://example.com)" onkeypress="if(event.key==='Enter')navigateTo()">
-            <button class="primary" onclick="navigateTo()">🔍 Go</button>
-            <button onclick="searchDDG()">🦆 DuckDuckGo</button>
-            <button onclick="goBack()">← Back</button>
-            <button onclick="goForward()">→ Forward</button>
-            <button onclick="window.location='/browser/settings'">⚙️ Settings</button>
+            <input type="text" id="urlInput" placeholder="Enter URL or search term..." autocomplete="off">
+            <button class="primary" id="goBtn">Go</button>
+            <button id="ddgBtn">DuckDuckGo</button>
+            <button id="backBtn">◀</button>
+            <button id="fwdBtn">▶</button>
+            <button id="settingsBtn">Settings</button>
         </div>
 
         <div class="info-bar">
-            <div class="info-item"><span class="label">Mode:</span> <span>Text-Only (Scripts/Styles Stripped)</span></div>
+            <div class="info-item"><span class="label">URL:</span> <span id="currentUrl">-</span></div>
             <div class="info-item"><span class="label">Status:</span> <span id="statusText">Ready</span></div>
+            <div class="info-item"><span class="label">Time:</span> <span id="loadTime">-</span></div>
         </div>
 
         <div class="content-area">
             <div class="content-header">
                 <span id="pageTitle">Page Content</span>
-                <span id="loadTime"></span>
             </div>
             <div id="pageContent">
                 <div style="text-align:center;padding:40px;color:#666">
-                    <h2>Welcome to Secure Browser</h2>
-                    <p>Enter a URL above to browse the web safely.</p>
-                    <p>All JavaScript, CSS, and images are stripped for security.</p>
-                    <p>Links are rewritten to stay within this secure tunnel.</p>
+                    <h2>Secure Browser</h2>
+                    <p>Enter a URL above or search with DuckDuckGo.</p>
+                    <p>Content is sanitized based on your settings.</p>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        let history = [];
-        let historyIndex = -1;
+        (function() {
+            const historyStack = [];
+            let historyIdx = -1;
+            let isNavigating = false;
 
-        function showToast(message, type = 'success') {
-            const toast = document.createElement('div');
-            toast.className = 'toast ' + type;
-            toast.textContent = message;
-            document.body.appendChild(toast);
-            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
-        }
+            const $ = id => document.getElementById(id);
 
-        function navigateTo(url) {
-            url = url || document.getElementById('urlInput').value.trim();
-            if (!url) {
-                showToast('Please enter a URL', 'error');
-                return;
+            function showToast(msg, type) {
+                const t = document.createElement('div');
+                t.className = 'toast ' + type;
+                t.textContent = msg;
+                document.body.appendChild(t);
+                setTimeout(() => t.remove(), 3000);
             }
 
-            if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                url = 'https://' + url;
-            }
+            function fetchPage(url, addToHistory = true) {
+                if (isNavigating) return;
+                isNavigating = true;
 
-            document.getElementById('urlInput').value = url;
-            document.getElementById('statusText').textContent = 'Loading...';
-            document.getElementById('pageContent').innerHTML = '<div class="loading">Fetching and sanitizing content...</div>';
+                if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                    url = 'https://' + url;
+                }
 
-            const startTime = Date.now();
+                $('urlInput').value = url;
+                $('currentUrl').textContent = url.length > 50 ? url.substring(0, 50) + '...' : url;
+                $('statusText').textContent = 'Loading...';
+                $('pageContent').innerHTML = '<div class="loading">Fetching content...</div>';
 
-            fetch('/proxy/fetch?url=' + encodeURIComponent(url))
-                .then(r => {
-                    if (!r.ok) throw new Error('Fetch failed: ' + r.status);
-                    return r.text();
-                })
-                .then(html => {
-                    const loadTime = Date.now() - startTime;
-                    document.getElementById('loadTime').textContent = loadTime + 'ms';
-                    document.getElementById('statusText').textContent = 'Loaded';
-                    document.getElementById('pageContent').innerHTML = html;
+                const start = Date.now();
 
-                    // Extract title
-                    const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-                    document.getElementById('pageTitle').textContent = titleMatch ? titleMatch[1] : url;
+                fetch('/proxy/fetch?url=' + encodeURIComponent(url))
+                    .then(r => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    })
+                    .then(html => {
+                        $('loadTime').textContent = (Date.now() - start) + 'ms';
+                        $('statusText').textContent = 'Loaded';
+                        $('pageContent').innerHTML = html;
 
-                    // Add to history
-                    if (historyIndex < history.length - 1) {
-                        history = history.slice(0, historyIndex + 1);
-                    }
-                    history.push(url);
-                    historyIndex = history.length - 1;
+                        const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+                        $('pageTitle').textContent = titleMatch ? titleMatch[1].substring(0, 60) : 'Page';
 
-                    // Handle internal link clicks
-                    document.querySelectorAll('#pageContent a').forEach(a => {
-                        a.addEventListener('click', function(e) {
-                            e.preventDefault();
-                            const href = this.getAttribute('data-href') || this.getAttribute('href');
-                            if (href && href.startsWith('/proxy/fetch?url=')) {
-                                navigateTo(decodeURIComponent(href.replace('/proxy/fetch?url=', '')));
-                            } else if (href && !href.startsWith('javascript:')) {
-                                navigateTo(href);
+                        if (addToHistory) {
+                            if (historyIdx < historyStack.length - 1) {
+                                historyStack.splice(historyIdx + 1);
                             }
-                        });
+                            historyStack.push(url);
+                            historyIdx = historyStack.length - 1;
+                        }
+
+                        isNavigating = false;
+                    })
+                    .catch(e => {
+                        $('statusText').textContent = 'Error';
+                        $('loadTime').textContent = '-';
+                        $('pageContent').innerHTML = '<div class="error"><h3>Failed to load</h3><p>' + e.message + '</p><p>URL: ' + url + '</p></div>';
+                        isNavigating = false;
                     });
-                })
-                .catch(e => {
-                    document.getElementById('statusText').textContent = 'Error';
-                    document.getElementById('pageContent').innerHTML = '<div class="error"><h3>Failed to load page</h3><p>' + e.message + '</p></div>';
-                    showToast('Failed to load: ' + e.message, 'error');
-                });
-        }
-
-        function searchDDG() {
-            const query = document.getElementById('urlInput').value.trim();
-            if (!query) {
-                navigateTo('https://lite.duckduckgo.com/lite/');
-            } else {
-                navigateTo('https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(query));
             }
-        }
 
-        function goBack() {
-            if (historyIndex > 0) {
-                historyIndex--;
-                document.getElementById('urlInput').value = history[historyIndex];
-                navigateTo(history[historyIndex]);
-            }
-        }
+            // Event delegation for all clicks in page content
+            $('pageContent').addEventListener('click', function(e) {
+                let target = e.target;
+                while (target && target !== this) {
+                    if (target.tagName === 'A') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        let href = target.getAttribute('data-href') || target.getAttribute('href');
+                        if (href) {
+                            if (href.startsWith('/proxy/fetch?url=')) {
+                                href = decodeURIComponent(href.replace('/proxy/fetch?url=', ''));
+                            }
+                            if (!href.startsWith('javascript:') && !href.startsWith('#') && !href.startsWith('mailto:')) {
+                                fetchPage(href);
+                            }
+                        }
+                        return false;
+                    }
+                    target = target.parentNode;
+                }
+            }, true);
 
-        function goForward() {
-            if (historyIndex < history.length - 1) {
-                historyIndex++;
-                document.getElementById('urlInput').value = history[historyIndex];
-                navigateTo(history[historyIndex]);
-            }
-        }
+            $('goBtn').addEventListener('click', function() {
+                const url = $('urlInput').value.trim();
+                if (url) fetchPage(url);
+            });
+
+            $('urlInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    const url = this.value.trim();
+                    if (url) fetchPage(url);
+                }
+            });
+
+            $('ddgBtn').addEventListener('click', function() {
+                const q = $('urlInput').value.trim();
+                if (q && !q.startsWith('http')) {
+                    fetchPage('https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(q));
+                } else {
+                    fetchPage('https://lite.duckduckgo.com/lite/');
+                }
+            });
+
+            $('backBtn').addEventListener('click', function() {
+                if (historyIdx > 0) {
+                    historyIdx--;
+                    fetchPage(historyStack[historyIdx], false);
+                }
+            });
+
+            $('fwdBtn').addEventListener('click', function() {
+                if (historyIdx < historyStack.length - 1) {
+                    historyIdx++;
+                    fetchPage(historyStack[historyIdx], false);
+                }
+            });
+
+            $('settingsBtn').addEventListener('click', function() {
+                window.location.href = '/browser/settings';
+            });
+        })();
     </script>
 </body>
 </html>
@@ -3158,107 +3225,139 @@ void handleBrowser() {
 String sanitizeHtml(const String& html, const String& baseUrl) {
     String result = html;
 
-    // Remove script tags and content
-    int scriptStart = 0;
-    while ((scriptStart = result.indexOf("<script", scriptStart)) != -1) {
-        int scriptEnd = result.indexOf("</script>", scriptStart);
-        if (scriptEnd != -1) {
-            result = result.substring(0, scriptStart) + result.substring(scriptEnd + 9);
-        } else {
-            int tagEnd = result.indexOf(">", scriptStart);
-            if (tagEnd != -1) {
-                result = result.substring(0, scriptStart) + result.substring(tagEnd + 1);
+    // Remove script tags and content (if enabled)
+    if (sysConfig.stripScripts) {
+        int scriptStart = 0;
+        while ((scriptStart = result.indexOf("<script", scriptStart)) != -1) {
+            int scriptEnd = result.indexOf("</script>", scriptStart);
+            if (scriptEnd != -1) {
+                result = result.substring(0, scriptStart) + result.substring(scriptEnd + 9);
+            } else {
+                int tagEnd = result.indexOf(">", scriptStart);
+                if (tagEnd != -1) {
+                    result = result.substring(0, scriptStart) + result.substring(tagEnd + 1);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Remove style tags and content (if enabled)
+    if (sysConfig.stripStyles) {
+        int styleStart = 0;
+        while ((styleStart = result.indexOf("<style", styleStart)) != -1) {
+            int styleEnd = result.indexOf("</style>", styleStart);
+            if (styleEnd != -1) {
+                result = result.substring(0, styleStart) + result.substring(styleEnd + 8);
             } else {
                 break;
             }
         }
     }
 
-    // Remove style tags and content
-    int styleStart = 0;
-    while ((styleStart = result.indexOf("<style", styleStart)) != -1) {
-        int styleEnd = result.indexOf("</style>", styleStart);
-        if (styleEnd != -1) {
-            result = result.substring(0, styleStart) + result.substring(styleEnd + 8);
-        } else {
-            break;
-        }
-    }
-
-    // Remove iframe tags
-    int iframeStart = 0;
-    while ((iframeStart = result.indexOf("<iframe", iframeStart)) != -1) {
-        int iframeEnd = result.indexOf(">", iframeStart);
-        if (result.indexOf("/>", iframeStart) < iframeEnd && result.indexOf("/>", iframeStart) != -1) {
-            iframeEnd = result.indexOf("/>", iframeStart) + 2;
-        } else if (iframeEnd != -1) {
-            int closeTag = result.indexOf("</iframe>", iframeEnd);
-            if (closeTag != -1) {
-                iframeEnd = closeTag + 9;
+    // Remove iframe tags (if enabled)
+    if (sysConfig.stripIframes) {
+        int iframeStart = 0;
+        while ((iframeStart = result.indexOf("<iframe", iframeStart)) != -1) {
+            int iframeEnd = result.indexOf("</iframe>", iframeStart);
+            if (iframeEnd != -1) {
+                result = result.substring(0, iframeStart) + result.substring(iframeEnd + 9);
             } else {
-                iframeEnd += 1;
-            }
-        }
-        if (iframeEnd != -1) {
-            result = result.substring(0, iframeStart) + result.substring(iframeEnd);
-        } else {
-            break;
-        }
-    }
-
-    // Remove object and embed tags
-    int objStart = 0;
-    while ((objStart = result.indexOf("<object", objStart)) != -1) {
-        int objEnd = result.indexOf("</object>", objStart);
-        if (objEnd != -1) {
-            result = result.substring(0, objStart) + result.substring(objEnd + 9);
-        } else {
-            break;
-        }
-    }
-
-    int embedStart = 0;
-    while ((embedStart = result.indexOf("<embed", embedStart)) != -1) {
-        int embedEnd = result.indexOf(">", embedStart);
-        if (embedEnd != -1) {
-            result = result.substring(0, embedStart) + result.substring(embedEnd + 1);
-        } else {
-            break;
-        }
-    }
-
-    // Replace img tags with placeholder text
-    int imgStart = 0;
-    while ((imgStart = result.indexOf("<img", imgStart)) != -1) {
-        int imgEnd = result.indexOf(">", imgStart);
-        if (imgEnd != -1) {
-            // Try to get alt text
-            String imgTag = result.substring(imgStart, imgEnd + 1);
-            String altText = "[IMAGE]";
-            int altIdx = imgTag.indexOf("alt=\"");
-            if (altIdx != -1) {
-                int altEnd = imgTag.indexOf("\"", altIdx + 5);
-                if (altEnd != -1) {
-                    altText = "[IMAGE: " + imgTag.substring(altIdx + 5, altEnd) + "]";
+                int tagEnd = result.indexOf(">", iframeStart);
+                if (tagEnd != -1) {
+                    result = result.substring(0, iframeStart) + result.substring(tagEnd + 1);
+                } else {
+                    break;
                 }
             }
-            result = result.substring(0, imgStart) + "<span class=\"img-placeholder\">" + altText + "</span>" + result.substring(imgEnd + 1);
-            imgStart += altText.length() + 40;
-        } else {
-            break;
         }
     }
 
-    // Remove inline event handlers (onclick, onload, onerror, etc.)
-    String events[] = {"onclick", "onload", "onerror", "onmouseover", "onmouseout", "onfocus", "onblur", "onsubmit", "onchange", "onkeydown", "onkeyup", "onkeypress"};
-    for (int e = 0; e < 12; e++) {
-        int evtStart = 0;
-        while ((evtStart = result.indexOf(events[e] + "=\"", evtStart)) != -1) {
-            int evtEnd = result.indexOf("\"", evtStart + events[e].length() + 2);
-            if (evtEnd != -1) {
-                result = result.substring(0, evtStart) + result.substring(evtEnd + 1);
+    // Remove object and embed tags (if enabled)
+    if (sysConfig.stripObjects) {
+        int objStart = 0;
+        while ((objStart = result.indexOf("<object", objStart)) != -1) {
+            int objEnd = result.indexOf("</object>", objStart);
+            if (objEnd != -1) {
+                result = result.substring(0, objStart) + result.substring(objEnd + 9);
             } else {
-                evtStart++;
+                break;
+            }
+        }
+
+        int embedStart = 0;
+        while ((embedStart = result.indexOf("<embed", embedStart)) != -1) {
+            int embedEnd = result.indexOf(">", embedStart);
+            if (embedEnd != -1) {
+                result = result.substring(0, embedStart) + result.substring(embedEnd + 1);
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Replace img tags with placeholder text (if enabled)
+    if (sysConfig.stripImages) {
+        int imgStart = 0;
+        while ((imgStart = result.indexOf("<img", imgStart)) != -1) {
+            int imgEnd = result.indexOf(">", imgStart);
+            if (imgEnd != -1) {
+                String imgTag = result.substring(imgStart, imgEnd + 1);
+                String altText = "[IMG]";
+                int altIdx = imgTag.indexOf("alt=\"");
+                if (altIdx != -1) {
+                    int altEnd = imgTag.indexOf("\"", altIdx + 5);
+                    if (altEnd != -1) {
+                        altText = "[" + imgTag.substring(altIdx + 5, altEnd) + "]";
+                    }
+                }
+                result = result.substring(0, imgStart) + altText + result.substring(imgEnd + 1);
+                imgStart += altText.length();
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Remove form elements (if enabled)
+    if (sysConfig.stripForms) {
+        int formStart = 0;
+        while ((formStart = result.indexOf("<form", formStart)) != -1) {
+            int formEnd = result.indexOf("</form>", formStart);
+            if (formEnd != -1) {
+                result = result.substring(0, formStart) + result.substring(formEnd + 7);
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Remove inline event handlers (if enabled)
+    if (sysConfig.stripEventHandlers) {
+        String events[] = {"onclick", "onload", "onerror", "onmouseover", "onmouseout", "onfocus", "onblur", "onsubmit", "onchange", "onkeydown", "onkeyup", "onkeypress", "onmousedown", "onmouseup"};
+        for (int e = 0; e < 14; e++) {
+            int evtStart = 0;
+            while ((evtStart = result.indexOf(events[e] + "=\"", evtStart)) != -1) {
+                int evtEnd = result.indexOf("\"", evtStart + events[e].length() + 2);
+                if (evtEnd != -1) {
+                    result = result.substring(0, evtStart) + result.substring(evtEnd + 1);
+                } else {
+                    evtStart++;
+                }
+            }
+        }
+    }
+
+    // Remove external resources like link tags for CSS (if enabled)
+    if (sysConfig.stripExternalResources) {
+        int linkStart = 0;
+        while ((linkStart = result.indexOf("<link", linkStart)) != -1) {
+            int linkEnd = result.indexOf(">", linkStart);
+            if (linkEnd != -1) {
+                result = result.substring(0, linkStart) + result.substring(linkEnd + 1);
+            } else {
+                break;
             }
         }
     }
@@ -3415,9 +3514,17 @@ void handleBrowserSettings() {
 
         if (doc.containsKey("browserTimeout")) sysConfig.browserTimeout = doc["browserTimeout"];
         if (doc.containsKey("browserMaxSize")) sysConfig.browserMaxSize = doc["browserMaxSize"];
-        if (doc.containsKey("browserStripImages")) sysConfig.browserStripImages = doc["browserStripImages"];
-        if (doc.containsKey("browserStripForms")) sysConfig.browserStripForms = doc["browserStripForms"];
         if (doc.containsKey("browserUserAgent")) sysConfig.browserUserAgent = doc["browserUserAgent"].as<String>();
+
+        // Fine-grained sanitization settings
+        if (doc.containsKey("stripScripts")) sysConfig.stripScripts = doc["stripScripts"];
+        if (doc.containsKey("stripStyles")) sysConfig.stripStyles = doc["stripStyles"];
+        if (doc.containsKey("stripIframes")) sysConfig.stripIframes = doc["stripIframes"];
+        if (doc.containsKey("stripObjects")) sysConfig.stripObjects = doc["stripObjects"];
+        if (doc.containsKey("stripImages")) sysConfig.stripImages = doc["stripImages"];
+        if (doc.containsKey("stripForms")) sysConfig.stripForms = doc["stripForms"];
+        if (doc.containsKey("stripEventHandlers")) sysConfig.stripEventHandlers = doc["stripEventHandlers"];
+        if (doc.containsKey("stripExternalResources")) sysConfig.stripExternalResources = doc["stripExternalResources"];
 
         saveSystemConfig();
         server.send(200, "text/plain", "Settings saved");
@@ -3433,25 +3540,37 @@ void handleBrowserSettings() {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Browser Settings - ESP32</title>
     <style>
-        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460;--warn:#ffa500}
         *{box-sizing:border-box;margin:0;padding:0}
         body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);padding:20px}
-        .container{max-width:600px;margin:auto}
+        .container{max-width:700px;margin:auto}
         header{background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:20px;border-radius:12px;display:flex;align-items:center;gap:15px}
         header a{color:var(--text);text-decoration:none;font-size:1.5rem}
         header h1{font-size:1.3rem}
-        .card{background:var(--card);border-radius:12px;padding:25px;box-shadow:0 4px 20px rgba(0,0,0,.3)}
+        .card{background:var(--card);border-radius:12px;padding:25px;box-shadow:0 4px 20px rgba(0,0,0,.3);margin-bottom:20px}
+        .card h2{font-size:1.1rem;margin-bottom:15px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:10px}
         .form-group{margin-bottom:20px}
         label{display:block;margin-bottom:8px;font-weight:600;color:var(--dim)}
         input[type="text"],input[type="number"]{width:100%;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:1rem}
         input:focus{outline:none;border-color:var(--accent)}
-        .checkbox-group{display:flex;align-items:center;gap:10px}
-        .checkbox-group input{width:20px;height:20px}
+        .checkbox-group{display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;background:var(--bg);margin-bottom:10px}
+        .checkbox-group input{width:20px;height:20px;flex-shrink:0}
+        .checkbox-group label{margin:0;font-weight:normal}
+        .checkbox-group .desc{font-size:0.85rem;color:var(--dim);margin-top:3px}
+        .security-high{border-left:3px solid var(--success)}
+        .security-med{border-left:3px solid var(--warn)}
+        .security-low{border-left:3px solid var(--accent)}
         button{width:100%;padding:14px;border-radius:8px;border:none;background:var(--success);color:#fff;font-weight:600;font-size:1rem;cursor:pointer;margin-top:10px}
         button:hover{opacity:0.9}
         .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999}
         .toast.success{background:var(--success)}
         .toast.error{background:#ff6b6b}
+        .legend{display:flex;gap:15px;margin-bottom:15px;font-size:0.85rem}
+        .legend span{display:flex;align-items:center;gap:5px}
+        .legend .dot{width:12px;height:12px;border-radius:50%}
+        .legend .high{background:var(--success)}
+        .legend .med{background:var(--warn)}
+        .legend .low{background:var(--accent)}
     </style>
 </head>
 <body>
@@ -3460,29 +3579,97 @@ void handleBrowserSettings() {
             <a href="/browser">← Back</a>
             <h1>Browser Settings</h1>
         </header>
+
         <div class="card">
+            <h2>Request Settings</h2>
             <div class="form-group">
                 <label>Request Timeout (ms)</label>
                 <input type="number" id="browserTimeout" min="1000" max="30000" step="1000">
             </div>
             <div class="form-group">
                 <label>Max Response Size (bytes)</label>
-                <input type="number" id="browserMaxSize" min="10000" max="200000" step="10000">
+                <input type="number" id="browserMaxSize" min="10000" max="500000" step="10000">
             </div>
             <div class="form-group">
                 <label>User Agent</label>
                 <input type="text" id="browserUserAgent">
             </div>
-            <div class="form-group checkbox-group">
-                <input type="checkbox" id="browserStripImages">
-                <label for="browserStripImages" style="margin:0">Strip Images (replace with placeholders)</label>
-            </div>
-            <div class="form-group checkbox-group">
-                <input type="checkbox" id="browserStripForms">
-                <label for="browserStripForms" style="margin:0">Strip Forms (remove form elements)</label>
-            </div>
-            <button onclick="saveSettings()">Save Settings</button>
         </div>
+
+        <div class="card">
+            <h2>Content Sanitization</h2>
+            <div class="legend">
+                <span><div class="dot high"></div> High security</span>
+                <span><div class="dot med"></div> Medium</span>
+                <span><div class="dot low"></div> Visual/Functional</span>
+            </div>
+
+            <div class="checkbox-group security-high">
+                <input type="checkbox" id="stripScripts">
+                <div>
+                    <label for="stripScripts">Strip Scripts</label>
+                    <div class="desc">Remove all &lt;script&gt; tags and inline JavaScript. Highly recommended for security.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-high">
+                <input type="checkbox" id="stripEventHandlers">
+                <div>
+                    <label for="stripEventHandlers">Strip Event Handlers</label>
+                    <div class="desc">Remove onclick, onload, onmouseover and other inline event attributes.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-high">
+                <input type="checkbox" id="stripIframes">
+                <div>
+                    <label for="stripIframes">Strip Iframes</label>
+                    <div class="desc">Remove &lt;iframe&gt; tags which can embed external content.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-med">
+                <input type="checkbox" id="stripObjects">
+                <div>
+                    <label for="stripObjects">Strip Objects/Embeds</label>
+                    <div class="desc">Remove &lt;object&gt;, &lt;embed&gt;, and &lt;applet&gt; tags (Flash, plugins).</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-med">
+                <input type="checkbox" id="stripExternalResources">
+                <div>
+                    <label for="stripExternalResources">Strip External Resources</label>
+                    <div class="desc">Remove external CSS and JS links. May break page styling significantly.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-low">
+                <input type="checkbox" id="stripStyles">
+                <div>
+                    <label for="stripStyles">Strip Styles</label>
+                    <div class="desc">Remove &lt;style&gt; tags and inline styles. Results in plain text appearance.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-low">
+                <input type="checkbox" id="stripImages">
+                <div>
+                    <label for="stripImages">Strip Images</label>
+                    <div class="desc">Replace images with [IMG] placeholders. Saves bandwidth but affects readability.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-low">
+                <input type="checkbox" id="stripForms">
+                <div>
+                    <label for="stripForms">Strip Forms</label>
+                    <div class="desc">Remove all &lt;form&gt; elements including inputs and buttons.</div>
+                </div>
+            </div>
+        </div>
+
+        <button onclick="saveSettings()">Save Settings</button>
     </div>
     <script>
         function showToast(msg, type) {
@@ -3497,11 +3684,17 @@ void handleBrowserSettings() {
             fetch('/api/system/config')
                 .then(r => r.json())
                 .then(data => {
-                    document.getElementById('browserTimeout').value = data.browserTimeout;
-                    document.getElementById('browserMaxSize').value = data.browserMaxSize;
-                    document.getElementById('browserUserAgent').value = data.browserUserAgent;
-                    document.getElementById('browserStripImages').checked = data.browserStripImages;
-                    document.getElementById('browserStripForms').checked = data.browserStripForms;
+                    document.getElementById('browserTimeout').value = data.browserTimeout || 15000;
+                    document.getElementById('browserMaxSize').value = data.browserMaxSize || 100000;
+                    document.getElementById('browserUserAgent').value = data.browserUserAgent || '';
+                    document.getElementById('stripScripts').checked = data.stripScripts !== false;
+                    document.getElementById('stripStyles').checked = data.stripStyles === true;
+                    document.getElementById('stripIframes').checked = data.stripIframes !== false;
+                    document.getElementById('stripObjects').checked = data.stripObjects !== false;
+                    document.getElementById('stripImages').checked = data.stripImages === true;
+                    document.getElementById('stripForms').checked = data.stripForms === true;
+                    document.getElementById('stripEventHandlers').checked = data.stripEventHandlers !== false;
+                    document.getElementById('stripExternalResources').checked = data.stripExternalResources === true;
                 });
         }
 
@@ -3510,8 +3703,14 @@ void handleBrowserSettings() {
                 browserTimeout: parseInt(document.getElementById('browserTimeout').value),
                 browserMaxSize: parseInt(document.getElementById('browserMaxSize').value),
                 browserUserAgent: document.getElementById('browserUserAgent').value,
-                browserStripImages: document.getElementById('browserStripImages').checked,
-                browserStripForms: document.getElementById('browserStripForms').checked
+                stripScripts: document.getElementById('stripScripts').checked,
+                stripStyles: document.getElementById('stripStyles').checked,
+                stripIframes: document.getElementById('stripIframes').checked,
+                stripObjects: document.getElementById('stripObjects').checked,
+                stripImages: document.getElementById('stripImages').checked,
+                stripForms: document.getElementById('stripForms').checked,
+                stripEventHandlers: document.getElementById('stripEventHandlers').checked,
+                stripExternalResources: document.getElementById('stripExternalResources').checked
             };
             fetch('/browser/settings', {
                 method: 'POST',
