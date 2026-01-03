@@ -1,4 +1,4 @@
-![ESP32-S3-GEEK-details-3](https://github.com/user-attachments/assets/9e503acd-031d-4f37-86e6-19d1264eda6a)
+<img width="905" height="627" alt="image" src="https://github.com/user-attachments/assets/9e503acd-031d-4f37-86e6-19d1264eda6a" />
 
 ![root](https://github.com/user-attachments/assets/10118534-a6a5-4a7e-a1b0-ee548673e9cc)
  
@@ -7,6 +7,18 @@
 ![duck](https://github.com/user-attachments/assets/db9758d4-656b-44e6-911a-0cee96083963)
 
 ![file](https://github.com/user-attachments/assets/76e86718-f617-4899-b7d4-4737b6a089d2)
+
+<img width="1345" height="627" alt="image" src="https://github.com/user-attachments/assets/6b1ed904-5088-47b3-97e3-5e87084fdad5" />
+
+<img width="1351" height="631" alt="image" src="https://github.com/user-attachments/assets/1e12a1ea-a0f3-4674-8f66-eec5496cf722" />
+
+<img width="1347" height="628" alt="image" src="https://github.com/user-attachments/assets/8a35ca8f-939f-406a-98f0-b9e83549791a" />
+
+<img width="742" height="1301" alt="image" src="https://github.com/user-attachments/assets/8d229ba2-5b5a-4888-93f4-0d9447314fa4" />
+
+
+
+
 
  
 # ESP32 Advanced Control
