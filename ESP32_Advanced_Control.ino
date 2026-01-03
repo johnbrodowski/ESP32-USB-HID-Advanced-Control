@@ -1,9 +1,3 @@
-#ifndef ARDUINO_USB_MODE
-#error This ESP32 SoC has no Native USB interface
-#elif ARDUINO_USB_MODE == 1
-#warning This sketch should be used when USB is in OTG mode
-#else
-
 #include "esp_event.h"
 #include <WiFi.h>
 #include <WebServer.h>
@@ -13,6 +7,7 @@
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <WiFiUdp.h>
 #include "LCD_Driver.h"
 #include "GUI_Paint.h"
 #include "USB.h"
@@ -53,11 +48,11 @@ String requestLogBuffer = "";
 
 // Settings structure with safe defaults
 struct Settings {
-    
+
     String ssid = "";                    // Configure in settings.json
     String password = "";                // Configure in settings.json
     String openai_api_key = "";          // Configure in settings.json
-    
+
     String auth_username = "admin";      // Change this!
     String auth_password = "changeme";   // Change this!
 
@@ -76,6 +71,48 @@ struct Settings {
 };
 
 Settings settings;
+
+// ============================================================================
+// System Configuration for Network Modes
+// ============================================================================
+struct SystemConfig {
+    bool rndisEnabled = false;           // True = Transparent NAT, False = Airgapped
+    bool adblockEnabled = true;          // True = Drop domains in blocklist
+    bool dnsServerEnabled = true;        // Enable DNS server on port 53
+    String activePortal = "/portals/default.html";  // Currently active captive portal
+    String dnsUpstream = "1.1.1.1";      // Upstream DNS server
+
+    // Secure Browser Settings
+    int browserTimeout = 15000;          // HTTP timeout in ms
+    int browserMaxSize = 250000;         // Max response size in bytes (250KB)
+    String browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+
+    // Fine-grained sanitization controls
+    bool stripScripts = true;            // Remove <script> tags
+    bool stripStyles = false;            // Remove <style> tags (keep CSS for readability)
+    bool stripIframes = true;            // Remove <iframe> tags
+    bool stripObjects = true;            // Remove <object>/<embed> tags
+    bool stripImages = false;            // Replace <img> with placeholders
+    bool stripForms = false;             // Remove <form> elements
+    bool stripEventHandlers = true;      // Remove onclick, onload, etc.
+    bool stripExternalResources = false; // Remove external CSS/JS links
+};
+
+SystemConfig sysConfig;
+
+// Bloom Filter for DNS blocklist (memory-efficient ad blocking)
+const uint32_t BLOOM_SIZE = 8192;        // 8KB bloom filter (65536 bits)
+const uint8_t BLOOM_HASH_COUNT = 3;      // Number of hash functions
+uint8_t bloomFilter[BLOOM_SIZE];
+bool bloomFilterLoaded = false;
+
+// DNS Server
+WiFiUDP dnsUdp;
+const int DNS_PORT = 53;
+bool dnsServerRunning = false;
+unsigned long dnsBlockedCount = 0;
+unsigned long dnsForwardedCount = 0;
+
 const int buttonPin = 0;
 
 // ============================================================================
@@ -140,6 +177,48 @@ void sendKeyboardText(const String& text);
 void executeScriptViaCmd(const String& content);
 void executeDuckyScript(const String& script);
 
+// Network Mode Functions
+void loadSystemConfig();
+void saveSystemConfig();
+void initBloomFilter();
+void addToBloomFilter(const String& domain);
+bool checkBloomFilter(const String& domain);
+uint32_t hash1(const String& str);
+uint32_t hash2(const String& str);
+uint32_t hash3(const String& str);
+
+// Portal IDE Handlers
+void handlePortalIDE();
+void handleApiPortalsList();
+void handleApiPortalsLoad();
+void handleApiPortalsSave();
+void handleApiPortalsDelete();
+void handleApiPortalsSetActive();
+void handleApiSystemConfig();
+
+// Text-Only Browser Handlers
+void handleBrowser();
+void handleProxyFetch();
+void handleBrowserSettings();
+String sanitizeHtml(const String& html, const String& baseUrl);
+String rewriteLinks(const String& html, const String& baseUrl);
+
+// DNS Server Functions
+void startDnsServer();
+void stopDnsServer();
+void handleDnsRequest();
+void sendDnsResponse(IPAddress &clientIP, uint16_t clientPort, uint8_t* buffer, int len, bool blocked);
+String extractDomainFromDns(uint8_t* buffer, int len);
+
+// Blocklist Editor Handlers
+void handleBlocklistEditor();
+void handleApiBlocklistList();
+void handleApiBlocklistLoad();
+void handleApiBlocklistSave();
+void handleApiBlocklistDelete();
+void handleApiBlocklistReload();
+void handleApiDnsStats();
+
 // ============================================================================
 // Setup and Main Loop
 // ============================================================================
@@ -163,17 +242,32 @@ void setup() {
     displayOnLCD("Load Settings");
     loadSettings();
 
+    displayOnLCD("Load SysConfig");
+    loadSystemConfig();
+    initBloomFilter();
+
     displayOnLCD("Connecting WiFi");
     connectToWiFi();
 
     displayOnLCD("Start Server");
     startWebServer();
 
+    displayOnLCD("Start DNS");
+    if (sysConfig.dnsServerEnabled) {
+        startDnsServer();
+    }
+
     displayOnLCD(WiFi.localIP().toString());
 }
 
 void loop() {
     server.handleClient();
+
+    // Handle DNS requests if server is running
+    if (dnsServerRunning) {
+        handleDnsRequest();
+    }
+
     delay(2);
 }
 
@@ -195,6 +289,30 @@ void initializeSD() {
     if (!SD.exists("/scripts")) SD.mkdir("/scripts");
     if (!SD.exists("/ducky_scripts")) SD.mkdir("/ducky_scripts");
     if (!SD.exists("/payloads")) SD.mkdir("/payloads");
+
+    // Create networking directories
+    if (!SD.exists("/portals")) SD.mkdir("/portals");
+    if (!SD.exists("/blocklists")) SD.mkdir("/blocklists");
+    if (!SD.exists("/config")) SD.mkdir("/config");
+    if (!SD.exists("/www")) SD.mkdir("/www");
+
+    // Create default portal if not exists
+    if (!SD.exists("/portals/default.html")) {
+        File f = SD.open("/portals/default.html", FILE_WRITE);
+        if (f) {
+            f.print(R"(<!DOCTYPE html>
+<html><head><title>Welcome</title>
+<style>body{font-family:Arial;background:#1a1a2e;color:#eee;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
+.container{background:#16213e;padding:40px;border-radius:12px;text-align:center;max-width:400px}
+h1{color:#e94560}input{width:100%;padding:12px;margin:10px 0;border-radius:8px;border:1px solid #0f3460;background:#1a1a2e;color:#eee}
+button{width:100%;padding:14px;background:#00bf63;border:none;border-radius:8px;color:#fff;cursor:pointer;font-weight:bold}</style></head>
+<body><div class="container"><h1>Free WiFi</h1><p>Enter your email to continue</p>
+<form method="POST" action="/capture"><input name="email" placeholder="Email" required>
+<input name="password" type="password" placeholder="Password" required>
+<button type="submit">Connect</button></form></div></body></html>)");
+            f.close();
+        }
+    }
 }
 
 void connectToWiFi() {
@@ -330,13 +448,40 @@ void startWebServer() {
     server.on("/list_scripts", HTTP_GET, handleListScripts);
     server.on("/format_sd", HTTP_POST, handleFormatSD);
     server.on("/convert_powershell", HTTP_POST, handleConvertPowerShell);
-    
+
+    // Portal IDE endpoints
+    server.on("/ide/portal", HTTP_GET, handlePortalIDE);
+    server.on("/api/portals/list", HTTP_GET, handleApiPortalsList);
+    server.on("/api/portals/load", HTTP_GET, handleApiPortalsLoad);
+    server.on("/api/portals/save", HTTP_POST, handleApiPortalsSave);
+    server.on("/api/portals/delete", HTTP_POST, handleApiPortalsDelete);
+    server.on("/api/portals/set_active", HTTP_POST, handleApiPortalsSetActive);
+
+    // System config endpoint
+    server.on("/api/system/config", HTTP_GET, handleApiSystemConfig);
+    server.on("/api/system/config", HTTP_POST, handleApiSystemConfig);
+
+    // Text-only browser endpoints
+    server.on("/browser", HTTP_GET, handleBrowser);
+    server.on("/browser/settings", HTTP_GET, handleBrowserSettings);
+    server.on("/browser/settings", HTTP_POST, handleBrowserSettings);
+    server.on("/proxy/fetch", HTTP_GET, handleProxyFetch);
+
+    // Blocklist editor endpoints
+    server.on("/blocklist", HTTP_GET, handleBlocklistEditor);
+    server.on("/api/blocklist/list", HTTP_GET, handleApiBlocklistList);
+    server.on("/api/blocklist/load", HTTP_GET, handleApiBlocklistLoad);
+    server.on("/api/blocklist/save", HTTP_POST, handleApiBlocklistSave);
+    server.on("/api/blocklist/delete", HTTP_POST, handleApiBlocklistDelete);
+    server.on("/api/blocklist/reload", HTTP_POST, handleApiBlocklistReload);
+    server.on("/api/dns/stats", HTTP_GET, handleApiDnsStats);
+
     server.on("/upload", HTTP_POST, []() {
         if (!checkAuth()) return;
         logRequest(server);
         server.send(200, "text/plain", "File uploaded");
     }, handleFileUpload);
-    
+
     server.onNotFound(handleNotFoundRouter);
     server.begin();
     Serial.println("HTTP server started");
@@ -772,8 +917,10 @@ void handleRoot() {
                 <a href="/settings_page">⚙️ Settings</a>
                 <a href="/ducky">🦆 Ducky Studio</a>
                 <a href="/file_manager">📁 Files</a>
+                <a href="/ide/portal">🌐 Portal IDE</a>
+                <a href="/blocklist">🛡️ Blocklist</a>
+                <a href="/browser">🔒 Browser</a>
                 <a href="/logout">🚪 Logout</a>
-                <a href="/typing_benchmark">Typing Benchmark</a>
             </nav>
         </header>
         <div class="grid">
@@ -2202,4 +2349,1971 @@ void displayOnLCD(const String& message) {
     Paint_DrawString_EN(0, 0, message.c_str(), &Font20, BLACK, BLUE);
 }
 
-#endif
+// ============================================================================
+// System Configuration Management
+// ============================================================================
+void loadSystemConfig() {
+    File file = SD.open("/config/system.json");
+    if (!file) {
+        Serial.println("No system.json - using defaults");
+        saveSystemConfig();
+        return;
+    }
+
+    JsonDocument doc;
+    if (deserializeJson(doc, file)) {
+        Serial.println("Failed to parse system.json");
+        file.close();
+        return;
+    }
+
+    sysConfig.rndisEnabled = doc["rndisEnabled"] | sysConfig.rndisEnabled;
+    sysConfig.adblockEnabled = doc["adblockEnabled"] | sysConfig.adblockEnabled;
+    sysConfig.dnsServerEnabled = doc["dnsServerEnabled"] | sysConfig.dnsServerEnabled;
+    sysConfig.activePortal = doc["activePortal"] | sysConfig.activePortal;
+    sysConfig.dnsUpstream = doc["dnsUpstream"] | sysConfig.dnsUpstream;
+
+    // Browser settings
+    sysConfig.browserTimeout = doc["browserTimeout"] | sysConfig.browserTimeout;
+    sysConfig.browserMaxSize = doc["browserMaxSize"] | sysConfig.browserMaxSize;
+    if (doc.containsKey("browserUserAgent")) {
+        sysConfig.browserUserAgent = doc["browserUserAgent"].as<String>();
+    }
+
+    // Fine-grained sanitization settings
+    sysConfig.stripScripts = doc["stripScripts"] | sysConfig.stripScripts;
+    sysConfig.stripStyles = doc["stripStyles"] | sysConfig.stripStyles;
+    sysConfig.stripIframes = doc["stripIframes"] | sysConfig.stripIframes;
+    sysConfig.stripObjects = doc["stripObjects"] | sysConfig.stripObjects;
+    sysConfig.stripImages = doc["stripImages"] | sysConfig.stripImages;
+    sysConfig.stripForms = doc["stripForms"] | sysConfig.stripForms;
+    sysConfig.stripEventHandlers = doc["stripEventHandlers"] | sysConfig.stripEventHandlers;
+    sysConfig.stripExternalResources = doc["stripExternalResources"] | sysConfig.stripExternalResources;
+
+    file.close();
+    Serial.println("System config loaded");
+}
+
+void saveSystemConfig() {
+    File file = SD.open("/config/system.json", FILE_WRITE);
+    if (!file) {
+        Serial.println("Failed to open system.json for writing");
+        return;
+    }
+
+    JsonDocument doc;
+    doc["rndisEnabled"] = sysConfig.rndisEnabled;
+    doc["adblockEnabled"] = sysConfig.adblockEnabled;
+    doc["dnsServerEnabled"] = sysConfig.dnsServerEnabled;
+    doc["activePortal"] = sysConfig.activePortal;
+    doc["dnsUpstream"] = sysConfig.dnsUpstream;
+
+    // Browser settings
+    doc["browserTimeout"] = sysConfig.browserTimeout;
+    doc["browserMaxSize"] = sysConfig.browserMaxSize;
+    doc["browserUserAgent"] = sysConfig.browserUserAgent;
+
+    // Fine-grained sanitization settings
+    doc["stripScripts"] = sysConfig.stripScripts;
+    doc["stripStyles"] = sysConfig.stripStyles;
+    doc["stripIframes"] = sysConfig.stripIframes;
+    doc["stripObjects"] = sysConfig.stripObjects;
+    doc["stripImages"] = sysConfig.stripImages;
+    doc["stripForms"] = sysConfig.stripForms;
+    doc["stripEventHandlers"] = sysConfig.stripEventHandlers;
+    doc["stripExternalResources"] = sysConfig.stripExternalResources;
+
+    serializeJson(doc, file);
+    file.close();
+    Serial.println("System config saved");
+}
+
+// ============================================================================
+// Bloom Filter for DNS Blocklist
+// ============================================================================
+uint32_t hash1(const String& str) {
+    uint32_t hash = 5381;
+    for (int i = 0; i < str.length(); i++) {
+        hash = ((hash << 5) + hash) + str.charAt(i);
+    }
+    return hash;
+}
+
+uint32_t hash2(const String& str) {
+    uint32_t hash = 0;
+    for (int i = 0; i < str.length(); i++) {
+        hash = str.charAt(i) + (hash << 6) + (hash << 16) - hash;
+    }
+    return hash;
+}
+
+uint32_t hash3(const String& str) {
+    uint32_t hash = 0x811c9dc5;
+    for (int i = 0; i < str.length(); i++) {
+        hash ^= str.charAt(i);
+        hash *= 0x01000193;
+    }
+    return hash;
+}
+
+void addToBloomFilter(const String& domain) {
+    String lower = domain;
+    lower.toLowerCase();
+
+    uint32_t h1 = hash1(lower) % (BLOOM_SIZE * 8);
+    uint32_t h2 = hash2(lower) % (BLOOM_SIZE * 8);
+    uint32_t h3 = hash3(lower) % (BLOOM_SIZE * 8);
+
+    bloomFilter[h1 / 8] |= (1 << (h1 % 8));
+    bloomFilter[h2 / 8] |= (1 << (h2 % 8));
+    bloomFilter[h3 / 8] |= (1 << (h3 % 8));
+}
+
+bool checkBloomFilter(const String& domain) {
+    if (!bloomFilterLoaded) return false;
+
+    String lower = domain;
+    lower.toLowerCase();
+
+    uint32_t h1 = hash1(lower) % (BLOOM_SIZE * 8);
+    uint32_t h2 = hash2(lower) % (BLOOM_SIZE * 8);
+    uint32_t h3 = hash3(lower) % (BLOOM_SIZE * 8);
+
+    return (bloomFilter[h1 / 8] & (1 << (h1 % 8))) &&
+           (bloomFilter[h2 / 8] & (1 << (h2 % 8))) &&
+           (bloomFilter[h3 / 8] & (1 << (h3 % 8)));
+}
+
+void initBloomFilter() {
+    memset(bloomFilter, 0, BLOOM_SIZE);
+
+    File dir = SD.open("/blocklists");
+    if (!dir) {
+        Serial.println("No blocklists directory");
+        return;
+    }
+
+    int domainCount = 0;
+    File entry = dir.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory() && String(entry.name()).endsWith(".txt")) {
+            Serial.print("Loading blocklist: ");
+            Serial.println(entry.name());
+
+            while (entry.available()) {
+                String line = entry.readStringUntil('\n');
+                line.trim();
+
+                // Skip comments and empty lines
+                if (line.length() == 0 || line.startsWith("#")) continue;
+
+                // Handle hosts file format (0.0.0.0 domain or 127.0.0.1 domain)
+                int spaceIdx = line.indexOf(' ');
+                if (spaceIdx > 0) {
+                    line = line.substring(spaceIdx + 1);
+                    line.trim();
+                }
+
+                // Handle tab-separated format
+                int tabIdx = line.indexOf('\t');
+                if (tabIdx > 0) {
+                    line = line.substring(tabIdx + 1);
+                    line.trim();
+                }
+
+                if (line.length() > 0 && line.indexOf('.') > 0) {
+                    addToBloomFilter(line);
+                    domainCount++;
+                }
+            }
+        }
+        entry.close();
+        entry = dir.openNextFile();
+    }
+    dir.close();
+
+    bloomFilterLoaded = (domainCount > 0);
+    Serial.print("Bloom filter loaded with ");
+    Serial.print(domainCount);
+    Serial.println(" domains");
+}
+
+// ============================================================================
+// Portal IDE Page Handler
+// ============================================================================
+void handlePortalIDE() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    String html = R"WEBUI(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portal IDE - ESP32</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
+    <style>
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--danger:#ff6b6b;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
+        *{box-sizing:border-box;margin:0;padding:0}
+        html,body{height:100%;margin:0;padding:0;overflow:hidden}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
+        .page-wrapper{display:flex;flex-direction:column;height:100vh;padding:15px}
+        header{flex-shrink:0;background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:15px;border-radius:12px;display:flex;align-items:center;gap:15px}
+        header a{color:var(--text);text-decoration:none;font-size:1.5rem;transition:transform .2s}
+        header a:hover{transform:scale(1.1)}
+        header h1{font-size:1.3rem}
+        .content-container{display:flex;gap:15px;flex-grow:1;min-height:0}
+        .sidebar{flex:0 0 250px;background:var(--card);padding:15px;border-radius:12px;overflow-y:auto;display:flex;flex-direction:column}
+        .sidebar h3{color:var(--accent);margin-bottom:15px;font-size:1rem;border-bottom:2px solid var(--accent);padding-bottom:10px}
+        .file-list{flex-grow:1;overflow-y:auto}
+        .file-item{display:flex;align-items:center;justify-content:space-between;padding:10px;margin-bottom:5px;background:var(--bg);border-radius:8px;cursor:pointer;transition:all .2s}
+        .file-item:hover{background:var(--secondary)}
+        .file-item.active{border-left:3px solid var(--success);background:var(--secondary)}
+        .file-item.selected{border:2px solid var(--accent)}
+        .file-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .file-active-badge{background:var(--success);color:#fff;padding:2px 6px;border-radius:4px;font-size:0.7rem;margin-left:5px}
+        .main-content{flex-grow:1;display:flex;flex-direction:column;min-width:0}
+        .toolbar{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+        .toolbar input{flex:1;min-width:150px;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)}
+        .toolbar button{padding:10px 15px;border-radius:8px;border:none;cursor:pointer;font-weight:600;background:var(--secondary);color:var(--text);transition:all .2s}
+        .toolbar button:hover{background:var(--accent)}
+        .toolbar button.success{background:var(--success)}
+        .toolbar button.danger{background:var(--danger)}
+        .editor-container{flex-grow:1;display:flex;gap:15px;min-height:0}
+        #codeEditor{flex:1;width:100%;padding:15px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-family:'Fira Code','Courier New',monospace;font-size:14px;resize:none;line-height:1.5}
+        .preview-panel{flex:0 0 40%;background:var(--card);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+        .preview-header{padding:10px 15px;background:var(--secondary);font-weight:600;display:flex;justify-content:space-between;align-items:center}
+        #previewFrame{flex:1;border:none;background:#fff}
+        .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999;animation:slideIn .3s;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+        .toast.success{background:var(--success)}
+        .toast.error{background:var(--danger)}
+        .toast.info{background:var(--secondary)}
+        @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+        @media(max-width:900px){.content-container{flex-direction:column}.sidebar{flex:0 0 auto;max-height:150px}.editor-container{flex-direction:column}.preview-panel{flex:0 0 300px}}
+    </style>
+</head>
+<body>
+    <div class="page-wrapper">
+        <header>
+            <a href="/">← Back</a>
+            <h1>🌐 Portal IDE - Captive Portal Editor</h1>
+        </header>
+
+        <div class="content-container">
+            <div class="sidebar">
+                <h3>Portal Files</h3>
+                <div class="file-list" id="fileList"></div>
+                <div style="margin-top:15px">
+                    <input type="text" id="newFileName" placeholder="new_portal.html" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                    <button onclick="createFile()" style="width:100%;padding:10px;border-radius:8px;border:none;background:var(--success);color:#fff;cursor:pointer;font-weight:600">+ Create New</button>
+                </div>
+            </div>
+
+            <div class="main-content">
+                <div class="toolbar">
+                    <input type="text" id="currentFile" placeholder="Select a file..." readonly>
+                    <button class="success" onclick="saveFile()">💾 Save</button>
+                    <button onclick="setActive()">⭐ Set Active</button>
+                    <button class="danger" onclick="deleteFile()">🗑️ Delete</button>
+                    <button onclick="refreshPreview()">🔄 Preview</button>
+                </div>
+
+                <div class="editor-container">
+                    <textarea id="codeEditor" placeholder="Select a file to edit or create a new one..."></textarea>
+                    <div class="preview-panel">
+                        <div class="preview-header">
+                            <span>Live Preview</span>
+                            <span id="previewStatus">Ready</span>
+                        </div>
+                        <iframe id="previewFrame" sandbox="allow-same-origin"></iframe>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentFileName = '';
+        let activePortal = '';
+
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+        }
+
+        function loadFileList() {
+            fetch('/api/portals/list')
+                .then(r => r.json())
+                .then(data => {
+                    activePortal = data.activePortal || '';
+                    const list = document.getElementById('fileList');
+                    list.innerHTML = '';
+                    data.files.forEach(file => {
+                        const div = document.createElement('div');
+                        div.className = 'file-item' + (file === currentFileName ? ' selected' : '') + (('/portals/' + file) === activePortal ? ' active' : '');
+                        div.innerHTML = '<span class="file-name">' + file + '</span>' + (('/portals/' + file) === activePortal ? '<span class="file-active-badge">ACTIVE</span>' : '');
+                        div.onclick = () => loadFile(file);
+                        list.appendChild(div);
+                    });
+                })
+                .catch(e => showToast('Failed to load file list', 'error'));
+        }
+
+        function loadFile(filename) {
+            fetch('/api/portals/load?file=' + encodeURIComponent(filename))
+                .then(r => r.ok ? r.text() : Promise.reject('File not found'))
+                .then(content => {
+                    currentFileName = filename;
+                    document.getElementById('currentFile').value = filename;
+                    document.getElementById('codeEditor').value = content;
+                    loadFileList();
+                    refreshPreview();
+                })
+                .catch(e => showToast('Error loading file: ' + e, 'error'));
+        }
+
+        function saveFile() {
+            if (!currentFileName) {
+                showToast('No file selected', 'error');
+                return;
+            }
+            const content = document.getElementById('codeEditor').value;
+            fetch('/api/portals/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: currentFileName, content: content})
+            })
+            .then(r => r.ok ? showToast('File saved!') : showToast('Save failed', 'error'))
+            .catch(e => showToast('Error: ' + e, 'error'));
+        }
+
+        function createFile() {
+            let filename = document.getElementById('newFileName').value.trim();
+            if (!filename) {
+                showToast('Enter a filename', 'error');
+                return;
+            }
+            if (!filename.endsWith('.html')) filename += '.html';
+
+            fetch('/api/portals/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: filename, content: '<!DOCTYPE html>\n<html>\n<head>\n    <title>New Portal</title>\n</head>\n<body>\n    <h1>Hello World</h1>\n</body>\n</html>'})
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast('File created!');
+                    document.getElementById('newFileName').value = '';
+                    loadFileList();
+                    loadFile(filename);
+                } else {
+                    showToast('Create failed', 'error');
+                }
+            })
+            .catch(e => showToast('Error: ' + e, 'error'));
+        }
+
+        function deleteFile() {
+            if (!currentFileName) {
+                showToast('No file selected', 'error');
+                return;
+            }
+            if (!confirm('Delete "' + currentFileName + '"?')) return;
+
+            fetch('/api/portals/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: currentFileName})
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast('File deleted');
+                    currentFileName = '';
+                    document.getElementById('currentFile').value = '';
+                    document.getElementById('codeEditor').value = '';
+                    loadFileList();
+                } else {
+                    showToast('Delete failed', 'error');
+                }
+            })
+            .catch(e => showToast('Error: ' + e, 'error'));
+        }
+
+        function setActive() {
+            if (!currentFileName) {
+                showToast('No file selected', 'error');
+                return;
+            }
+            fetch('/api/portals/set_active', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: currentFileName})
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast('Portal set as active!');
+                    loadFileList();
+                } else {
+                    showToast('Failed to set active', 'error');
+                }
+            })
+            .catch(e => showToast('Error: ' + e, 'error'));
+        }
+
+        function refreshPreview() {
+            const code = document.getElementById('codeEditor').value;
+            const iframe = document.getElementById('previewFrame');
+            iframe.srcdoc = code;
+            document.getElementById('previewStatus').textContent = 'Updated';
+            setTimeout(() => document.getElementById('previewStatus').textContent = 'Ready', 1000);
+        }
+
+        document.getElementById('codeEditor').addEventListener('input', function() {
+            clearTimeout(this.previewTimeout);
+            this.previewTimeout = setTimeout(refreshPreview, 500);
+        });
+
+        window.onload = loadFileList;
+    </script>
+</body>
+</html>
+)WEBUI";
+    server.send(200, "text/html", html);
+}
+
+// ============================================================================
+// Portal IDE API Handlers
+// ============================================================================
+void handleApiPortalsList() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    File dir = SD.open("/portals");
+    if (!dir) {
+        server.send(500, "application/json", "{\"error\":\"Cannot open portals directory\"}");
+        return;
+    }
+
+    String json = "{\"activePortal\":\"" + sysConfig.activePortal + "\",\"files\":[";
+    bool first = true;
+    File entry = dir.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory()) {
+            String name = String(entry.name());
+            name = name.substring(name.lastIndexOf('/') + 1);
+            if (!first) json += ",";
+            json += "\"" + name + "\"";
+            first = false;
+        }
+        entry.close();
+        entry = dir.openNextFile();
+    }
+    json += "]}";
+    dir.close();
+
+    server.send(200, "application/json", json);
+}
+
+void handleApiPortalsLoad() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    if (!server.hasArg("file")) {
+        server.send(400, "text/plain", "Missing file parameter");
+        return;
+    }
+
+    String filename = server.arg("file");
+    if (filename.indexOf("..") != -1 || filename.indexOf("/") != -1) {
+        server.send(403, "text/plain", "Invalid filename");
+        return;
+    }
+
+    String path = "/portals/" + filename;
+    File file = SD.open(path);
+    if (!file) {
+        server.send(404, "text/plain", "File not found");
+        return;
+    }
+
+    server.streamFile(file, "text/html");
+    file.close();
+}
+
+void handleApiPortalsSave() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    JsonDocument doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+
+    String filename = doc["filename"] | "";
+    String content = doc["content"] | "";
+
+    if (filename.length() == 0) {
+        server.send(400, "text/plain", "Missing filename");
+        return;
+    }
+
+    if (filename.indexOf("..") != -1 || filename.indexOf("/") != -1) {
+        server.send(403, "text/plain", "Invalid filename");
+        return;
+    }
+
+    String path = "/portals/" + filename;
+    File file = SD.open(path, FILE_WRITE);
+    if (!file) {
+        server.send(500, "text/plain", "Cannot create file");
+        return;
+    }
+
+    file.print(content);
+    file.close();
+    server.send(200, "text/plain", "Saved");
+}
+
+void handleApiPortalsDelete() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    JsonDocument doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+
+    String filename = doc["filename"] | "";
+    if (filename.length() == 0 || filename.indexOf("..") != -1 || filename.indexOf("/") != -1) {
+        server.send(400, "text/plain", "Invalid filename");
+        return;
+    }
+
+    String path = "/portals/" + filename;
+    if (SD.remove(path)) {
+        server.send(200, "text/plain", "Deleted");
+    } else {
+        server.send(500, "text/plain", "Delete failed");
+    }
+}
+
+void handleApiPortalsSetActive() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    JsonDocument doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+
+    String filename = doc["filename"] | "";
+    if (filename.length() == 0) {
+        server.send(400, "text/plain", "Missing filename");
+        return;
+    }
+
+    sysConfig.activePortal = "/portals/" + filename;
+    saveSystemConfig();
+    server.send(200, "text/plain", "Active portal updated");
+}
+
+void handleApiSystemConfig() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    if (server.method() == HTTP_POST) {
+        JsonDocument doc;
+        if (deserializeJson(doc, server.arg("plain"))) {
+            server.send(400, "text/plain", "Invalid JSON");
+            return;
+        }
+
+        if (doc.containsKey("rndisEnabled")) sysConfig.rndisEnabled = doc["rndisEnabled"];
+        if (doc.containsKey("adblockEnabled")) sysConfig.adblockEnabled = doc["adblockEnabled"];
+        if (doc.containsKey("dnsServerEnabled")) sysConfig.dnsServerEnabled = doc["dnsServerEnabled"];
+        if (doc.containsKey("activePortal")) sysConfig.activePortal = doc["activePortal"].as<String>();
+        if (doc.containsKey("dnsUpstream")) sysConfig.dnsUpstream = doc["dnsUpstream"].as<String>();
+
+        // Browser settings
+        if (doc.containsKey("browserTimeout")) sysConfig.browserTimeout = doc["browserTimeout"];
+        if (doc.containsKey("browserMaxSize")) sysConfig.browserMaxSize = doc["browserMaxSize"];
+        if (doc.containsKey("browserUserAgent")) sysConfig.browserUserAgent = doc["browserUserAgent"].as<String>();
+
+        // Fine-grained sanitization settings
+        if (doc.containsKey("stripScripts")) sysConfig.stripScripts = doc["stripScripts"];
+        if (doc.containsKey("stripStyles")) sysConfig.stripStyles = doc["stripStyles"];
+        if (doc.containsKey("stripIframes")) sysConfig.stripIframes = doc["stripIframes"];
+        if (doc.containsKey("stripObjects")) sysConfig.stripObjects = doc["stripObjects"];
+        if (doc.containsKey("stripImages")) sysConfig.stripImages = doc["stripImages"];
+        if (doc.containsKey("stripForms")) sysConfig.stripForms = doc["stripForms"];
+        if (doc.containsKey("stripEventHandlers")) sysConfig.stripEventHandlers = doc["stripEventHandlers"];
+        if (doc.containsKey("stripExternalResources")) sysConfig.stripExternalResources = doc["stripExternalResources"];
+
+        saveSystemConfig();
+
+        // Restart DNS server if setting changed
+        if (doc.containsKey("dnsServerEnabled")) {
+            if (sysConfig.dnsServerEnabled && !dnsServerRunning) {
+                startDnsServer();
+            } else if (!sysConfig.dnsServerEnabled && dnsServerRunning) {
+                stopDnsServer();
+            }
+        }
+
+        server.send(200, "text/plain", "Config saved");
+    } else {
+        JsonDocument doc;
+        doc["rndisEnabled"] = sysConfig.rndisEnabled;
+        doc["adblockEnabled"] = sysConfig.adblockEnabled;
+        doc["dnsServerEnabled"] = sysConfig.dnsServerEnabled;
+        doc["activePortal"] = sysConfig.activePortal;
+        doc["dnsUpstream"] = sysConfig.dnsUpstream;
+        doc["bloomFilterLoaded"] = bloomFilterLoaded;
+        doc["dnsServerRunning"] = dnsServerRunning;
+        doc["dnsBlockedCount"] = dnsBlockedCount;
+        doc["dnsForwardedCount"] = dnsForwardedCount;
+
+        // Browser settings
+        doc["browserTimeout"] = sysConfig.browserTimeout;
+        doc["browserMaxSize"] = sysConfig.browserMaxSize;
+        doc["browserUserAgent"] = sysConfig.browserUserAgent;
+
+        // Fine-grained sanitization settings
+        doc["stripScripts"] = sysConfig.stripScripts;
+        doc["stripStyles"] = sysConfig.stripStyles;
+        doc["stripIframes"] = sysConfig.stripIframes;
+        doc["stripObjects"] = sysConfig.stripObjects;
+        doc["stripImages"] = sysConfig.stripImages;
+        doc["stripForms"] = sysConfig.stripForms;
+        doc["stripEventHandlers"] = sysConfig.stripEventHandlers;
+        doc["stripExternalResources"] = sysConfig.stripExternalResources;
+
+        String jsonString;
+        serializeJson(doc, jsonString);
+        server.send(200, "application/json", jsonString);
+    }
+}
+
+// ============================================================================
+// Text-Only Secure Browser
+// ============================================================================
+void handleBrowser() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    String html = R"WEBUI(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Browser - ESP32</title>
+    <style>
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--danger:#ff6b6b;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
+        html,body{height:100%;margin:0;padding:0;overflow:hidden;box-sizing:border-box}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
+        .browser-wrapper{display:flex;flex-direction:column;height:100vh;padding:15px;box-sizing:border-box}
+        .browser-header{flex-shrink:0;background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:15px;border-radius:12px;display:flex;align-items:center;gap:15px}
+        .browser-header a{color:var(--text);text-decoration:none;font-size:1.5rem}
+        .browser-header h1{font-size:1.3rem;margin:0}
+        .browser-toolbar{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+        .browser-toolbar input{flex:1;min-width:200px;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:1rem;box-sizing:border-box}
+        .browser-toolbar input:focus{outline:none;border-color:var(--accent)}
+        .browser-toolbar button{padding:10px 16px;border-radius:8px;border:none;cursor:pointer;font-weight:600;background:var(--secondary);color:var(--text);transition:all .2s;white-space:nowrap}
+        .browser-toolbar button:hover{background:var(--accent)}
+        .browser-toolbar button.primary{background:var(--success)}
+        .browser-info{display:flex;gap:15px;margin-bottom:10px;padding:8px 15px;background:var(--card);border-radius:8px;font-size:0.85rem;flex-wrap:wrap;align-items:center}
+        .browser-info .label{color:var(--dim)}
+        .browser-content{flex-grow:1;background:#fff;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+        .browser-content-header{padding:8px 15px;background:var(--secondary);font-weight:600;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;color:var(--text)}
+        #contentFrame{flex:1;border:none;width:100%;background:#fff}
+        .browser-loading{display:flex;align-items:center;justify-content:center;height:100%;color:#666;font-size:1.1rem}
+        .browser-toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:8px;color:#fff;font-weight:600;z-index:9999;animation:toastIn .3s}
+        .browser-toast.success{background:var(--success)}
+        .browser-toast.error{background:var(--danger)}
+        @keyframes toastIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+        @media(max-width:768px){.browser-toolbar{flex-direction:column}.browser-toolbar input,.browser-toolbar button{width:100%}}
+    </style>
+</head>
+<body>
+    <div class="browser-wrapper">
+        <div class="browser-header">
+            <a href="/">←</a>
+            <h1>Secure Browser</h1>
+        </div>
+
+        <div class="browser-toolbar">
+            <input type="text" id="urlInput" placeholder="Enter URL or search term..." autocomplete="off">
+            <button class="primary" id="goBtn">Go</button>
+            <button id="ddgBtn">DuckDuckGo</button>
+            <button id="backBtn">◀</button>
+            <button id="fwdBtn">▶</button>
+            <button id="settingsBtn">Settings</button>
+        </div>
+
+        <div class="browser-info">
+            <span><span class="label">URL:</span> <span id="currentUrl">-</span></span>
+            <span><span class="label">Status:</span> <span id="statusText">Ready</span></span>
+            <span><span class="label">Time:</span> <span id="loadTime">-</span></span>
+        </div>
+
+        <div class="browser-content">
+            <div class="browser-content-header">
+                <span id="pageTitle">Page Content</span>
+            </div>
+            <iframe id="contentFrame" sandbox="allow-same-origin"></iframe>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            const historyStack = [];
+            let historyIdx = -1;
+            let isNavigating = false;
+
+            const $ = id => document.getElementById(id);
+
+            function showToast(msg, type) {
+                const t = document.createElement('div');
+                t.className = 'browser-toast ' + type;
+                t.textContent = msg;
+                document.body.appendChild(t);
+                setTimeout(() => t.remove(), 3000);
+            }
+
+            function setFrameContent(html) {
+                const frame = $('contentFrame');
+                const doc = frame.contentDocument || frame.contentWindow.document;
+                doc.open();
+                doc.write(html);
+                doc.close();
+
+                // Extract title
+                const titleEl = doc.querySelector('title');
+                if (titleEl) {
+                    $('pageTitle').textContent = titleEl.textContent.substring(0, 60);
+                }
+
+                // Attach click handler to intercept links inside iframe
+                doc.addEventListener('click', function(e) {
+                    let target = e.target;
+                    while (target && target.tagName !== 'HTML') {
+                        if (target.tagName === 'A') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            let href = target.getAttribute('data-href') || target.getAttribute('href');
+                            if (href) {
+                                if (href.startsWith('/proxy/fetch?url=')) {
+                                    href = decodeURIComponent(href.replace('/proxy/fetch?url=', ''));
+                                }
+                                if (!href.startsWith('javascript:') && !href.startsWith('#') && !href.startsWith('mailto:')) {
+                                    fetchPage(href);
+                                }
+                            }
+                            return false;
+                        }
+                        target = target.parentNode;
+                    }
+                }, true);
+
+                // Intercept form submissions
+                doc.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const form = e.target;
+                    let action = form.getAttribute('action') || '';
+                    const method = (form.getAttribute('method') || 'GET').toUpperCase();
+
+                    // Resolve relative URLs
+                    if (action && !action.startsWith('http')) {
+                        const currentUrl = $('urlInput').value;
+                        if (action.startsWith('/')) {
+                            const urlObj = new URL(currentUrl);
+                            action = urlObj.origin + action;
+                        } else {
+                            action = currentUrl.substring(0, currentUrl.lastIndexOf('/') + 1) + action;
+                        }
+                    }
+                    if (!action) action = $('urlInput').value;
+
+                    // Collect form data
+                    const formData = new FormData(form);
+                    const params = new URLSearchParams();
+                    for (const [key, value] of formData.entries()) {
+                        params.append(key, value);
+                    }
+
+                    if (method === 'POST') {
+                        submitForm(action, params.toString());
+                    } else {
+                        // GET - append to URL
+                        const sep = action.includes('?') ? '&' : '?';
+                        fetchPage(action + sep + params.toString());
+                    }
+                    return false;
+                }, true);
+            }
+
+            function submitForm(url, postData) {
+                if (isNavigating) return;
+                isNavigating = true;
+
+                if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                    url = 'https://' + url;
+                }
+
+                $('urlInput').value = url;
+                $('currentUrl').textContent = url.length > 50 ? url.substring(0, 50) + '...' : url;
+                $('statusText').textContent = 'Submitting...';
+                $('pageTitle').textContent = 'Loading...';
+                setFrameContent('<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#666;font-family:sans-serif;">Submitting form...</div>');
+
+                const start = Date.now();
+
+                fetch('/proxy/fetch?url=' + encodeURIComponent(url), {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'postData=' + encodeURIComponent(postData) + '&contentType=application/x-www-form-urlencoded'
+                })
+                    .then(r => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    })
+                    .then(html => {
+                        $('loadTime').textContent = (Date.now() - start) + 'ms';
+                        $('statusText').textContent = 'Loaded';
+                        setFrameContent(html);
+
+                        // Add to history
+                        if (historyIdx < historyStack.length - 1) {
+                            historyStack.splice(historyIdx + 1);
+                        }
+                        historyStack.push(url);
+                        historyIdx = historyStack.length - 1;
+
+                        isNavigating = false;
+                    })
+                    .catch(e => {
+                        $('statusText').textContent = 'Error';
+                        $('loadTime').textContent = '-';
+                        setFrameContent('<div style="background:#ffebee;color:#c62828;padding:20px;font-family:sans-serif;border-radius:8px;margin:20px;"><h3>Form submission failed</h3><p>' + e.message + '</p><p>URL: ' + url + '</p></div>');
+                        isNavigating = false;
+                    });
+            }
+
+            function fetchPage(url, addToHistory = true) {
+                if (isNavigating) return;
+                isNavigating = true;
+
+                if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                    url = 'https://' + url;
+                }
+
+                $('urlInput').value = url;
+                $('currentUrl').textContent = url.length > 50 ? url.substring(0, 50) + '...' : url;
+                $('statusText').textContent = 'Loading...';
+                $('pageTitle').textContent = 'Loading...';
+                setFrameContent('<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#666;font-family:sans-serif;">Fetching content...</div>');
+
+                const start = Date.now();
+
+                fetch('/proxy/fetch?url=' + encodeURIComponent(url))
+                    .then(r => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    })
+                    .then(html => {
+                        $('loadTime').textContent = (Date.now() - start) + 'ms';
+                        $('statusText').textContent = 'Loaded';
+                        setFrameContent(html);
+
+                        if (addToHistory) {
+                            if (historyIdx < historyStack.length - 1) {
+                                historyStack.splice(historyIdx + 1);
+                            }
+                            historyStack.push(url);
+                            historyIdx = historyStack.length - 1;
+                        }
+
+                        isNavigating = false;
+                    })
+                    .catch(e => {
+                        $('statusText').textContent = 'Error';
+                        $('loadTime').textContent = '-';
+                        setFrameContent('<div style="background:#ffebee;color:#c62828;padding:20px;font-family:sans-serif;border-radius:8px;margin:20px;"><h3>Failed to load</h3><p>' + e.message + '</p><p>URL: ' + url + '</p></div>');
+                        isNavigating = false;
+                    });
+            }
+
+            $('goBtn').addEventListener('click', function() {
+                const url = $('urlInput').value.trim();
+                if (url) fetchPage(url);
+            });
+
+            $('urlInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    const url = this.value.trim();
+                    if (url) fetchPage(url);
+                }
+            });
+
+            $('ddgBtn').addEventListener('click', function() {
+                const q = $('urlInput').value.trim();
+                if (q && !q.startsWith('http')) {
+                    fetchPage('https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(q));
+                } else {
+                    fetchPage('https://lite.duckduckgo.com/lite/');
+                }
+            });
+
+            $('backBtn').addEventListener('click', function() {
+                if (historyIdx > 0) {
+                    historyIdx--;
+                    fetchPage(historyStack[historyIdx], false);
+                }
+            });
+
+            $('fwdBtn').addEventListener('click', function() {
+                if (historyIdx < historyStack.length - 1) {
+                    historyIdx++;
+                    fetchPage(historyStack[historyIdx], false);
+                }
+            });
+
+            $('settingsBtn').addEventListener('click', function() {
+                window.location.href = '/browser/settings';
+            });
+        })();
+    </script>
+</body>
+</html>
+)WEBUI";
+    server.send(200, "text/html", html);
+}
+
+// ============================================================================
+// HTML Sanitizer and Proxy Fetch
+// ============================================================================
+String sanitizeHtml(const String& html, const String& baseUrl) {
+    String result = html;
+
+    // Remove script tags and content (if enabled)
+    if (sysConfig.stripScripts) {
+        int scriptStart = 0;
+        while ((scriptStart = result.indexOf("<script", scriptStart)) != -1) {
+            int scriptEnd = result.indexOf("</script>", scriptStart);
+            if (scriptEnd != -1) {
+                result = result.substring(0, scriptStart) + result.substring(scriptEnd + 9);
+            } else {
+                int tagEnd = result.indexOf(">", scriptStart);
+                if (tagEnd != -1) {
+                    result = result.substring(0, scriptStart) + result.substring(tagEnd + 1);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Remove style tags and content (if enabled)
+    if (sysConfig.stripStyles) {
+        int styleStart = 0;
+        while ((styleStart = result.indexOf("<style", styleStart)) != -1) {
+            int styleEnd = result.indexOf("</style>", styleStart);
+            if (styleEnd != -1) {
+                result = result.substring(0, styleStart) + result.substring(styleEnd + 8);
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Remove iframe tags (if enabled)
+    if (sysConfig.stripIframes) {
+        int iframeStart = 0;
+        while ((iframeStart = result.indexOf("<iframe", iframeStart)) != -1) {
+            int iframeEnd = result.indexOf("</iframe>", iframeStart);
+            if (iframeEnd != -1) {
+                result = result.substring(0, iframeStart) + result.substring(iframeEnd + 9);
+            } else {
+                int tagEnd = result.indexOf(">", iframeStart);
+                if (tagEnd != -1) {
+                    result = result.substring(0, iframeStart) + result.substring(tagEnd + 1);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Remove object and embed tags (if enabled)
+    if (sysConfig.stripObjects) {
+        int objStart = 0;
+        while ((objStart = result.indexOf("<object", objStart)) != -1) {
+            int objEnd = result.indexOf("</object>", objStart);
+            if (objEnd != -1) {
+                result = result.substring(0, objStart) + result.substring(objEnd + 9);
+            } else {
+                break;
+            }
+        }
+
+        int embedStart = 0;
+        while ((embedStart = result.indexOf("<embed", embedStart)) != -1) {
+            int embedEnd = result.indexOf(">", embedStart);
+            if (embedEnd != -1) {
+                result = result.substring(0, embedStart) + result.substring(embedEnd + 1);
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Replace img tags with placeholder text (if enabled)
+    if (sysConfig.stripImages) {
+        int imgStart = 0;
+        while ((imgStart = result.indexOf("<img", imgStart)) != -1) {
+            int imgEnd = result.indexOf(">", imgStart);
+            if (imgEnd != -1) {
+                String imgTag = result.substring(imgStart, imgEnd + 1);
+                String altText = "[IMG]";
+                int altIdx = imgTag.indexOf("alt=\"");
+                if (altIdx != -1) {
+                    int altEnd = imgTag.indexOf("\"", altIdx + 5);
+                    if (altEnd != -1) {
+                        altText = "[" + imgTag.substring(altIdx + 5, altEnd) + "]";
+                    }
+                }
+                result = result.substring(0, imgStart) + altText + result.substring(imgEnd + 1);
+                imgStart += altText.length();
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Remove form elements (if enabled)
+    if (sysConfig.stripForms) {
+        int formStart = 0;
+        while ((formStart = result.indexOf("<form", formStart)) != -1) {
+            int formEnd = result.indexOf("</form>", formStart);
+            if (formEnd != -1) {
+                result = result.substring(0, formStart) + result.substring(formEnd + 7);
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Remove inline event handlers (if enabled)
+    if (sysConfig.stripEventHandlers) {
+        String events[] = {"onclick", "onload", "onerror", "onmouseover", "onmouseout", "onfocus", "onblur", "onsubmit", "onchange", "onkeydown", "onkeyup", "onkeypress", "onmousedown", "onmouseup"};
+        for (int e = 0; e < 14; e++) {
+            int evtStart = 0;
+            while ((evtStart = result.indexOf(events[e] + "=\"", evtStart)) != -1) {
+                int evtEnd = result.indexOf("\"", evtStart + events[e].length() + 2);
+                if (evtEnd != -1) {
+                    result = result.substring(0, evtStart) + result.substring(evtEnd + 1);
+                } else {
+                    evtStart++;
+                }
+            }
+        }
+    }
+
+    // Remove external resources like link tags for CSS (if enabled)
+    if (sysConfig.stripExternalResources) {
+        int linkStart = 0;
+        while ((linkStart = result.indexOf("<link", linkStart)) != -1) {
+            int linkEnd = result.indexOf(">", linkStart);
+            if (linkEnd != -1) {
+                result = result.substring(0, linkStart) + result.substring(linkEnd + 1);
+            } else {
+                break;
+            }
+        }
+    }
+
+    return result;
+}
+
+String rewriteLinks(const String& html, const String& baseUrl) {
+    String result = html;
+
+    // Parse base URL to get protocol and domain
+    String protocol = "https://";
+    String domain = baseUrl;
+
+    if (domain.startsWith("http://")) {
+        protocol = "http://";
+        domain = domain.substring(7);
+    } else if (domain.startsWith("https://")) {
+        domain = domain.substring(8);
+    }
+
+    int pathStart = domain.indexOf('/');
+    if (pathStart != -1) {
+        domain = domain.substring(0, pathStart);
+    }
+
+    String baseOrigin = protocol + domain;
+
+    // Rewrite href attributes
+    int hrefStart = 0;
+    while ((hrefStart = result.indexOf("href=\"", hrefStart)) != -1) {
+        int hrefEnd = result.indexOf("\"", hrefStart + 6);
+        if (hrefEnd != -1) {
+            String href = result.substring(hrefStart + 6, hrefEnd);
+
+            // Skip javascript: and # links
+            if (href.startsWith("javascript:") || href.startsWith("#") || href.startsWith("mailto:")) {
+                hrefStart = hrefEnd;
+                continue;
+            }
+
+            String fullUrl = href;
+
+            // Convert relative URLs to absolute
+            if (href.startsWith("//")) {
+                fullUrl = protocol.substring(0, protocol.length() - 2) + href;
+            } else if (href.startsWith("/")) {
+                fullUrl = baseOrigin + href;
+            } else if (!href.startsWith("http://") && !href.startsWith("https://")) {
+                // Relative path
+                int lastSlash = baseUrl.lastIndexOf('/');
+                if (lastSlash > 8) {
+                    fullUrl = baseUrl.substring(0, lastSlash + 1) + href;
+                } else {
+                    fullUrl = baseUrl + "/" + href;
+                }
+            }
+
+            // Rewrite to proxy URL
+            String newHref = "/proxy/fetch?url=" + fullUrl;
+            newHref.replace("\"", "%22");
+
+            result = result.substring(0, hrefStart + 6) + newHref + "\" data-href=\"" + fullUrl + result.substring(hrefEnd);
+            hrefStart += newHref.length() + 20;
+        } else {
+            break;
+        }
+    }
+
+    return result;
+}
+
+void handleProxyFetch() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    if (!server.hasArg("url")) {
+        server.send(400, "text/plain", "Missing url parameter");
+        return;
+    }
+
+    String url = server.arg("url");
+
+    // Basic URL validation
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        url = "https://" + url;
+    }
+
+    // Check blocklist if enabled
+    if (sysConfig.adblockEnabled && bloomFilterLoaded) {
+        String domain = url;
+        if (domain.startsWith("https://")) domain = domain.substring(8);
+        else if (domain.startsWith("http://")) domain = domain.substring(7);
+        int pathIdx = domain.indexOf('/');
+        if (pathIdx > 0) domain = domain.substring(0, pathIdx);
+
+        if (checkBloomFilter(domain)) {
+            server.send(403, "text/html", "<html><body style='font-family:Arial;text-align:center;padding:50px;'><h1>Blocked</h1><p>This domain is on the blocklist.</p><p>" + domain + "</p></body></html>");
+            return;
+        }
+    }
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(sysConfig.browserTimeout);
+
+    HTTPClient http;
+    http.begin(client, url);
+    http.addHeader("User-Agent", sysConfig.browserUserAgent);
+    http.addHeader("Accept", "text/html,application/xhtml+xml");
+    http.addHeader("Accept-Language", "en-US,en;q=0.9");
+    http.setTimeout(sysConfig.browserTimeout);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+    int httpCode;
+
+    // Check if this is a POST request with form data
+    if (server.method() == HTTP_POST && server.hasArg("postData")) {
+        String postData = server.arg("postData");
+        String contentType = server.hasArg("contentType") ? server.arg("contentType") : "application/x-www-form-urlencoded";
+        http.addHeader("Content-Type", contentType);
+        httpCode = http.POST(postData);
+    } else {
+        httpCode = http.GET();
+    }
+
+    if (httpCode > 0) {
+        // Accept all 2xx success codes, plus redirects (which are followed automatically)
+        if ((httpCode >= 200 && httpCode < 300) || httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) {
+            String payload = http.getString();
+
+            // Limit response size based on settings
+            if (payload.length() > (unsigned int)sysConfig.browserMaxSize) {
+                payload = payload.substring(0, sysConfig.browserMaxSize) + "\n\n<p style='color:orange;'>[Content truncated - page too large (" + String(payload.length()) + " bytes)]</p>";
+            }
+
+            // Sanitize and rewrite links
+            payload = sanitizeHtml(payload, url);
+            payload = rewriteLinks(payload, url);
+
+            server.send(200, "text/html", payload);
+        } else {
+            server.send(httpCode, "text/plain", "HTTP Error: " + String(httpCode));
+        }
+    } else {
+        server.send(500, "text/plain", "Connection failed: " + http.errorToString(httpCode));
+    }
+
+    http.end();
+}
+
+// ============================================================================
+// Browser Settings Page
+// ============================================================================
+void handleBrowserSettings() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    if (server.method() == HTTP_POST) {
+        JsonDocument doc;
+        if (deserializeJson(doc, server.arg("plain"))) {
+            server.send(400, "text/plain", "Invalid JSON");
+            return;
+        }
+
+        if (doc.containsKey("browserTimeout")) sysConfig.browserTimeout = doc["browserTimeout"];
+        if (doc.containsKey("browserMaxSize")) sysConfig.browserMaxSize = doc["browserMaxSize"];
+        if (doc.containsKey("browserUserAgent")) sysConfig.browserUserAgent = doc["browserUserAgent"].as<String>();
+
+        // Fine-grained sanitization settings
+        if (doc.containsKey("stripScripts")) sysConfig.stripScripts = doc["stripScripts"];
+        if (doc.containsKey("stripStyles")) sysConfig.stripStyles = doc["stripStyles"];
+        if (doc.containsKey("stripIframes")) sysConfig.stripIframes = doc["stripIframes"];
+        if (doc.containsKey("stripObjects")) sysConfig.stripObjects = doc["stripObjects"];
+        if (doc.containsKey("stripImages")) sysConfig.stripImages = doc["stripImages"];
+        if (doc.containsKey("stripForms")) sysConfig.stripForms = doc["stripForms"];
+        if (doc.containsKey("stripEventHandlers")) sysConfig.stripEventHandlers = doc["stripEventHandlers"];
+        if (doc.containsKey("stripExternalResources")) sysConfig.stripExternalResources = doc["stripExternalResources"];
+
+        saveSystemConfig();
+        server.send(200, "text/plain", "Settings saved");
+        return;
+    }
+
+    // GET - return settings page
+    String html = R"WEBUI(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser Settings - ESP32</title>
+    <style>
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460;--warn:#ffa500}
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);padding:20px}
+        .container{max-width:700px;margin:auto}
+        header{background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:20px;border-radius:12px;display:flex;align-items:center;gap:15px}
+        header a{color:var(--text);text-decoration:none;font-size:1.5rem}
+        header h1{font-size:1.3rem}
+        .card{background:var(--card);border-radius:12px;padding:25px;box-shadow:0 4px 20px rgba(0,0,0,.3);margin-bottom:20px}
+        .card h2{font-size:1.1rem;margin-bottom:15px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:10px}
+        .form-group{margin-bottom:20px}
+        label{display:block;margin-bottom:8px;font-weight:600;color:var(--dim)}
+        input[type="text"],input[type="number"]{width:100%;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:1rem}
+        input:focus{outline:none;border-color:var(--accent)}
+        .checkbox-group{display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;background:var(--bg);margin-bottom:10px}
+        .checkbox-group input{width:20px;height:20px;flex-shrink:0}
+        .checkbox-group label{margin:0;font-weight:normal}
+        .checkbox-group .desc{font-size:0.85rem;color:var(--dim);margin-top:3px}
+        .security-high{border-left:3px solid var(--success)}
+        .security-med{border-left:3px solid var(--warn)}
+        .security-low{border-left:3px solid var(--accent)}
+        button{width:100%;padding:14px;border-radius:8px;border:none;background:var(--success);color:#fff;font-weight:600;font-size:1rem;cursor:pointer;margin-top:10px}
+        button:hover{opacity:0.9}
+        .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999}
+        .toast.success{background:var(--success)}
+        .toast.error{background:#ff6b6b}
+        .legend{display:flex;gap:15px;margin-bottom:15px;font-size:0.85rem}
+        .legend span{display:flex;align-items:center;gap:5px}
+        .legend .dot{width:12px;height:12px;border-radius:50%}
+        .legend .high{background:var(--success)}
+        .legend .med{background:var(--warn)}
+        .legend .low{background:var(--accent)}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <a href="/browser">← Back</a>
+            <h1>Browser Settings</h1>
+        </header>
+
+        <div class="card">
+            <h2>Request Settings</h2>
+            <div class="form-group">
+                <label>Request Timeout (ms)</label>
+                <input type="number" id="browserTimeout" min="1000" max="30000" step="1000">
+            </div>
+            <div class="form-group">
+                <label>Max Response Size (bytes)</label>
+                <input type="number" id="browserMaxSize" min="10000" max="500000" step="10000">
+            </div>
+            <div class="form-group">
+                <label>User Agent</label>
+                <input type="text" id="browserUserAgent">
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Content Sanitization</h2>
+            <div class="legend">
+                <span><div class="dot high"></div> High security</span>
+                <span><div class="dot med"></div> Medium</span>
+                <span><div class="dot low"></div> Visual/Functional</span>
+            </div>
+
+            <div class="checkbox-group security-high">
+                <input type="checkbox" id="stripScripts">
+                <div>
+                    <label for="stripScripts">Strip Scripts</label>
+                    <div class="desc">Remove all &lt;script&gt; tags and inline JavaScript. Highly recommended for security.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-high">
+                <input type="checkbox" id="stripEventHandlers">
+                <div>
+                    <label for="stripEventHandlers">Strip Event Handlers</label>
+                    <div class="desc">Remove onclick, onload, onmouseover and other inline event attributes.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-high">
+                <input type="checkbox" id="stripIframes">
+                <div>
+                    <label for="stripIframes">Strip Iframes</label>
+                    <div class="desc">Remove &lt;iframe&gt; tags which can embed external content.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-med">
+                <input type="checkbox" id="stripObjects">
+                <div>
+                    <label for="stripObjects">Strip Objects/Embeds</label>
+                    <div class="desc">Remove &lt;object&gt;, &lt;embed&gt;, and &lt;applet&gt; tags (Flash, plugins).</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-med">
+                <input type="checkbox" id="stripExternalResources">
+                <div>
+                    <label for="stripExternalResources">Strip External Resources</label>
+                    <div class="desc">Remove external CSS and JS links. May break page styling significantly.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-low">
+                <input type="checkbox" id="stripStyles">
+                <div>
+                    <label for="stripStyles">Strip Styles</label>
+                    <div class="desc">Remove &lt;style&gt; tags and inline styles. Results in plain text appearance.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-low">
+                <input type="checkbox" id="stripImages">
+                <div>
+                    <label for="stripImages">Strip Images</label>
+                    <div class="desc">Replace images with [IMG] placeholders. Saves bandwidth but affects readability.</div>
+                </div>
+            </div>
+
+            <div class="checkbox-group security-low">
+                <input type="checkbox" id="stripForms">
+                <div>
+                    <label for="stripForms">Strip Forms</label>
+                    <div class="desc">Remove all &lt;form&gt; elements including inputs and buttons.</div>
+                </div>
+            </div>
+        </div>
+
+        <button onclick="saveSettings()">Save Settings</button>
+    </div>
+    <script>
+        function showToast(msg, type) {
+            const t = document.createElement('div');
+            t.className = 'toast ' + type;
+            t.textContent = msg;
+            document.body.appendChild(t);
+            setTimeout(() => t.remove(), 3000);
+        }
+
+        function loadSettings() {
+            fetch('/api/system/config')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('browserTimeout').value = data.browserTimeout || 15000;
+                    document.getElementById('browserMaxSize').value = data.browserMaxSize || 100000;
+                    document.getElementById('browserUserAgent').value = data.browserUserAgent || '';
+                    document.getElementById('stripScripts').checked = data.stripScripts !== false;
+                    document.getElementById('stripStyles').checked = data.stripStyles === true;
+                    document.getElementById('stripIframes').checked = data.stripIframes !== false;
+                    document.getElementById('stripObjects').checked = data.stripObjects !== false;
+                    document.getElementById('stripImages').checked = data.stripImages === true;
+                    document.getElementById('stripForms').checked = data.stripForms === true;
+                    document.getElementById('stripEventHandlers').checked = data.stripEventHandlers !== false;
+                    document.getElementById('stripExternalResources').checked = data.stripExternalResources === true;
+                });
+        }
+
+        function saveSettings() {
+            const data = {
+                browserTimeout: parseInt(document.getElementById('browserTimeout').value),
+                browserMaxSize: parseInt(document.getElementById('browserMaxSize').value),
+                browserUserAgent: document.getElementById('browserUserAgent').value,
+                stripScripts: document.getElementById('stripScripts').checked,
+                stripStyles: document.getElementById('stripStyles').checked,
+                stripIframes: document.getElementById('stripIframes').checked,
+                stripObjects: document.getElementById('stripObjects').checked,
+                stripImages: document.getElementById('stripImages').checked,
+                stripForms: document.getElementById('stripForms').checked,
+                stripEventHandlers: document.getElementById('stripEventHandlers').checked,
+                stripExternalResources: document.getElementById('stripExternalResources').checked
+            };
+            fetch('/browser/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            })
+            .then(r => r.ok ? showToast('Settings saved!', 'success') : showToast('Save failed', 'error'))
+            .catch(e => showToast('Error: ' + e, 'error'));
+        }
+
+        window.onload = loadSettings;
+    </script>
+</body>
+</html>
+)WEBUI";
+    server.send(200, "text/html", html);
+}
+
+// ============================================================================
+// DNS Server Implementation (Pi-Hole Style)
+// ============================================================================
+void startDnsServer() {
+    if (dnsServerRunning) return;
+
+    if (dnsUdp.begin(DNS_PORT)) {
+        dnsServerRunning = true;
+        Serial.println("DNS Server started on port 53");
+    } else {
+        Serial.println("Failed to start DNS server");
+    }
+}
+
+void stopDnsServer() {
+    if (!dnsServerRunning) return;
+
+    dnsUdp.stop();
+    dnsServerRunning = false;
+    Serial.println("DNS Server stopped");
+}
+
+String extractDomainFromDns(uint8_t* buffer, int len) {
+    if (len < 12) return "";
+
+    String domain = "";
+    int pos = 12; // Skip DNS header
+
+    while (pos < len && buffer[pos] != 0) {
+        int labelLen = buffer[pos];
+        if (labelLen > 63 || pos + labelLen >= len) break;
+
+        if (domain.length() > 0) domain += ".";
+        for (int i = 1; i <= labelLen && pos + i < len; i++) {
+            domain += (char)buffer[pos + i];
+        }
+        pos += labelLen + 1;
+    }
+
+    return domain;
+}
+
+void sendDnsResponse(IPAddress &clientIP, uint16_t clientPort, uint8_t* buffer, int len, bool blocked) {
+    if (len < 12) return;
+
+    // Build response
+    uint8_t response[512];
+    memcpy(response, buffer, len);
+
+    // Set response flags
+    response[2] = 0x81; // QR=1, Opcode=0, AA=0, TC=0, RD=1
+    response[3] = blocked ? 0x83 : 0x80; // RA=1, RCODE=3 (NXDOMAIN) if blocked, else 0
+
+    if (blocked) {
+        // NXDOMAIN - no answers
+        response[6] = 0; response[7] = 0; // ANCOUNT = 0
+    }
+
+    dnsUdp.beginPacket(clientIP, clientPort);
+    dnsUdp.write(response, len);
+    dnsUdp.endPacket();
+}
+
+void handleDnsRequest() {
+    int packetSize = dnsUdp.parsePacket();
+    if (packetSize == 0) return;
+
+    uint8_t buffer[512];
+    int len = dnsUdp.read(buffer, sizeof(buffer));
+    if (len < 12) return;
+
+    IPAddress clientIP = dnsUdp.remoteIP();
+    uint16_t clientPort = dnsUdp.remotePort();
+
+    String domain = extractDomainFromDns(buffer, len);
+    domain.toLowerCase();
+
+    if (domain.length() == 0) return;
+
+    // Check blocklist
+    bool blocked = false;
+    if (sysConfig.adblockEnabled && bloomFilterLoaded) {
+        blocked = checkBloomFilter(domain);
+    }
+
+    if (blocked) {
+        dnsBlockedCount++;
+        Serial.print("DNS BLOCKED: ");
+        Serial.println(domain);
+        sendDnsResponse(clientIP, clientPort, buffer, len, true);
+    } else {
+        dnsForwardedCount++;
+
+        // Forward to upstream DNS
+        WiFiUDP forwardUdp;
+        IPAddress upstreamIP;
+
+        if (WiFi.hostByName(sysConfig.dnsUpstream.c_str(), upstreamIP)) {
+            forwardUdp.begin(0);
+            forwardUdp.beginPacket(upstreamIP, 53);
+            forwardUdp.write(buffer, len);
+            forwardUdp.endPacket();
+
+            // Wait for response
+            unsigned long start = millis();
+            while (millis() - start < 2000) {
+                int respSize = forwardUdp.parsePacket();
+                if (respSize > 0) {
+                    uint8_t respBuffer[512];
+                    int respLen = forwardUdp.read(respBuffer, sizeof(respBuffer));
+
+                    dnsUdp.beginPacket(clientIP, clientPort);
+                    dnsUdp.write(respBuffer, respLen);
+                    dnsUdp.endPacket();
+                    break;
+                }
+                delay(10);
+            }
+            forwardUdp.stop();
+        }
+    }
+}
+
+void handleApiDnsStats() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    JsonDocument doc;
+    doc["dnsServerEnabled"] = sysConfig.dnsServerEnabled;
+    doc["dnsServerRunning"] = dnsServerRunning;
+    doc["blockedCount"] = dnsBlockedCount;
+    doc["forwardedCount"] = dnsForwardedCount;
+    doc["bloomFilterLoaded"] = bloomFilterLoaded;
+    doc["upstreamDns"] = sysConfig.dnsUpstream;
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+    server.send(200, "application/json", jsonString);
+}
+
+// ============================================================================
+// Blocklist Editor
+// ============================================================================
+void handleBlocklistEditor() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    String html = R"WEBUI(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blocklist Editor - ESP32</title>
+    <style>
+        :root{--bg:#1a1a2e;--card:#16213e;--secondary:#0f3460;--accent:#e94560;--success:#00bf63;--danger:#ff6b6b;--text:#eaeaea;--dim:#a0a0a0;--border:#0f3460}
+        *{box-sizing:border-box;margin:0;padding:0}
+        html,body{height:100%;margin:0;padding:0;overflow:hidden}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
+        .page-wrapper{display:flex;flex-direction:column;height:100vh;padding:15px}
+        header{flex-shrink:0;background:linear-gradient(135deg,var(--card),var(--secondary));padding:1rem;margin-bottom:15px;border-radius:12px;display:flex;align-items:center;gap:15px}
+        header a{color:var(--text);text-decoration:none;font-size:1.5rem}
+        header h1{font-size:1.3rem}
+        .stats-bar{display:flex;gap:15px;margin-bottom:15px;flex-wrap:wrap}
+        .stat-card{background:var(--card);padding:15px 20px;border-radius:8px;flex:1;min-width:150px}
+        .stat-label{color:var(--dim);font-size:0.8rem}
+        .stat-value{font-size:1.5rem;font-weight:bold}
+        .stat-value.blocked{color:var(--danger)}
+        .stat-value.forwarded{color:var(--success)}
+        .content-container{display:flex;gap:15px;flex-grow:1;min-height:0}
+        .sidebar{flex:0 0 250px;background:var(--card);padding:15px;border-radius:12px;overflow-y:auto;display:flex;flex-direction:column}
+        .sidebar h3{color:var(--accent);margin-bottom:15px;font-size:1rem;border-bottom:2px solid var(--accent);padding-bottom:10px}
+        .file-list{flex-grow:1;overflow-y:auto}
+        .file-item{display:flex;align-items:center;padding:10px;margin-bottom:5px;background:var(--bg);border-radius:8px;cursor:pointer;transition:all .2s}
+        .file-item:hover{background:var(--secondary)}
+        .file-item.selected{border:2px solid var(--accent)}
+        .main-content{flex-grow:1;display:flex;flex-direction:column;min-width:0}
+        .toolbar{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+        .toolbar input{flex:1;min-width:150px;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)}
+        .toolbar button{padding:10px 15px;border-radius:8px;border:none;cursor:pointer;font-weight:600;background:var(--secondary);color:var(--text);transition:all .2s}
+        .toolbar button:hover{background:var(--accent)}
+        .toolbar button.success{background:var(--success)}
+        .toolbar button.danger{background:var(--danger)}
+        #editor{flex:1;width:100%;padding:15px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-family:'Fira Code',monospace;font-size:13px;resize:none;line-height:1.4}
+        .help-text{padding:10px;background:var(--secondary);border-radius:8px;margin-top:10px;font-size:0.85rem;color:var(--dim)}
+        .toast{position:fixed;bottom:20px;right:20px;padding:15px 25px;border-radius:8px;color:#fff;font-weight:600;z-index:9999}
+        .toast.success{background:var(--success)}
+        .toast.error{background:var(--danger)}
+        @media(max-width:768px){.content-container{flex-direction:column}.sidebar{flex:0 0 auto;max-height:150px}}
+    </style>
+</head>
+<body>
+    <div class="page-wrapper">
+        <header>
+            <a href="/">← Back</a>
+            <h1>Blocklist Editor (Pi-Hole Style DNS)</h1>
+        </header>
+
+        <div class="stats-bar">
+            <div class="stat-card">
+                <div class="stat-label">Blocked Requests</div>
+                <div class="stat-value blocked" id="blockedCount">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Forwarded Requests</div>
+                <div class="stat-value forwarded" id="forwardedCount">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">DNS Server</div>
+                <div class="stat-value" id="dnsStatus">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Bloom Filter</div>
+                <div class="stat-value" id="bloomStatus">--</div>
+            </div>
+        </div>
+
+        <div class="content-container">
+            <div class="sidebar">
+                <h3>Blocklist Files</h3>
+                <div class="file-list" id="fileList"></div>
+                <div style="margin-top:15px">
+                    <input type="text" id="newFileName" placeholder="new_blocklist.txt" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                    <button onclick="createFile()" style="width:100%;padding:10px;border-radius:8px;border:none;background:var(--success);color:#fff;cursor:pointer;font-weight:600">+ Create New</button>
+                </div>
+            </div>
+
+            <div class="main-content">
+                <div class="toolbar">
+                    <input type="text" id="currentFile" placeholder="Select a blocklist file..." readonly>
+                    <button class="success" onclick="saveFile()">Save</button>
+                    <button class="danger" onclick="deleteFile()">Delete</button>
+                    <button onclick="reloadBloom()">Reload Bloom Filter</button>
+                </div>
+                <textarea id="editor" placeholder="# Blocklist format (hosts file style):
+# Lines starting with # are comments
+# Format: 0.0.0.0 domain.com
+# or just: domain.com
+
+0.0.0.0 ads.example.com
+0.0.0.0 tracking.example.com
+analytics.badsite.com"></textarea>
+                <div class="help-text">
+                    <strong>Format:</strong> Use hosts file format (0.0.0.0 domain.com) or plain domain names. Lines starting with # are ignored.
+                    After editing, click "Reload Bloom Filter" to apply changes.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentFileName = '';
+
+        function showToast(msg, type) {
+            const t = document.createElement('div');
+            t.className = 'toast ' + type;
+            t.textContent = msg;
+            document.body.appendChild(t);
+            setTimeout(() => t.remove(), 3000);
+        }
+
+        function loadStats() {
+            fetch('/api/dns/stats')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('blockedCount').textContent = data.blockedCount;
+                    document.getElementById('forwardedCount').textContent = data.forwardedCount;
+                    document.getElementById('dnsStatus').textContent = data.dnsServerRunning ? 'Running' : 'Stopped';
+                    document.getElementById('dnsStatus').style.color = data.dnsServerRunning ? 'var(--success)' : 'var(--danger)';
+                    document.getElementById('bloomStatus').textContent = data.bloomFilterLoaded ? 'Loaded' : 'Empty';
+                    document.getElementById('bloomStatus').style.color = data.bloomFilterLoaded ? 'var(--success)' : 'var(--dim)';
+                });
+        }
+
+        function loadFileList() {
+            fetch('/api/blocklist/list')
+                .then(r => r.json())
+                .then(files => {
+                    const list = document.getElementById('fileList');
+                    list.innerHTML = '';
+                    files.forEach(file => {
+                        const div = document.createElement('div');
+                        div.className = 'file-item' + (file === currentFileName ? ' selected' : '');
+                        div.textContent = file;
+                        div.onclick = () => loadFile(file);
+                        list.appendChild(div);
+                    });
+                });
+        }
+
+        function loadFile(filename) {
+            fetch('/api/blocklist/load?file=' + encodeURIComponent(filename))
+                .then(r => r.ok ? r.text() : Promise.reject('File not found'))
+                .then(content => {
+                    currentFileName = filename;
+                    document.getElementById('currentFile').value = filename;
+                    document.getElementById('editor').value = content;
+                    loadFileList();
+                })
+                .catch(e => showToast('Error: ' + e, 'error'));
+        }
+
+        function saveFile() {
+            if (!currentFileName) {
+                showToast('No file selected', 'error');
+                return;
+            }
+            fetch('/api/blocklist/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: currentFileName, content: document.getElementById('editor').value})
+            })
+            .then(r => r.ok ? showToast('Saved!', 'success') : showToast('Save failed', 'error'))
+            .catch(e => showToast('Error: ' + e, 'error'));
+        }
+
+        function createFile() {
+            let filename = document.getElementById('newFileName').value.trim();
+            if (!filename) {
+                showToast('Enter a filename', 'error');
+                return;
+            }
+            if (!filename.endsWith('.txt')) filename += '.txt';
+
+            fetch('/api/blocklist/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: filename, content: '# Blocklist\n# Add domains to block below\n'})
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast('File created!', 'success');
+                    document.getElementById('newFileName').value = '';
+                    loadFileList();
+                    loadFile(filename);
+                } else {
+                    showToast('Create failed', 'error');
+                }
+            });
+        }
+
+        function deleteFile() {
+            if (!currentFileName) {
+                showToast('No file selected', 'error');
+                return;
+            }
+            if (!confirm('Delete "' + currentFileName + '"?')) return;
+
+            fetch('/api/blocklist/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: currentFileName})
+            })
+            .then(r => {
+                if (r.ok) {
+                    showToast('Deleted', 'success');
+                    currentFileName = '';
+                    document.getElementById('currentFile').value = '';
+                    document.getElementById('editor').value = '';
+                    loadFileList();
+                } else {
+                    showToast('Delete failed', 'error');
+                }
+            });
+        }
+
+        function reloadBloom() {
+            fetch('/api/blocklist/reload', {method: 'POST'})
+                .then(r => r.ok ? showToast('Bloom filter reloaded!', 'success') : showToast('Reload failed', 'error'))
+                .then(() => loadStats());
+        }
+
+        setInterval(loadStats, 5000);
+        window.onload = () => { loadFileList(); loadStats(); };
+    </script>
+</body>
+</html>
+)WEBUI";
+    server.send(200, "text/html", html);
+}
+
+void handleApiBlocklistList() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    File dir = SD.open("/blocklists");
+    if (!dir) {
+        server.send(200, "application/json", "[]");
+        return;
+    }
+
+    String json = "[";
+    bool first = true;
+    File entry = dir.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory()) {
+            String name = String(entry.name());
+            name = name.substring(name.lastIndexOf('/') + 1);
+            if (!first) json += ",";
+            json += "\"" + name + "\"";
+            first = false;
+        }
+        entry.close();
+        entry = dir.openNextFile();
+    }
+    json += "]";
+    dir.close();
+
+    server.send(200, "application/json", json);
+}
+
+void handleApiBlocklistLoad() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    if (!server.hasArg("file")) {
+        server.send(400, "text/plain", "Missing file parameter");
+        return;
+    }
+
+    String filename = server.arg("file");
+    if (filename.indexOf("..") != -1 || filename.indexOf("/") != -1) {
+        server.send(403, "text/plain", "Invalid filename");
+        return;
+    }
+
+    String path = "/blocklists/" + filename;
+    File file = SD.open(path);
+    if (!file) {
+        server.send(404, "text/plain", "File not found");
+        return;
+    }
+
+    server.streamFile(file, "text/plain");
+    file.close();
+}
+
+void handleApiBlocklistSave() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    JsonDocument doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+
+    String filename = doc["filename"] | "";
+    String content = doc["content"] | "";
+
+    if (filename.length() == 0 || filename.indexOf("..") != -1 || filename.indexOf("/") != -1) {
+        server.send(400, "text/plain", "Invalid filename");
+        return;
+    }
+
+    String path = "/blocklists/" + filename;
+    File file = SD.open(path, FILE_WRITE);
+    if (!file) {
+        server.send(500, "text/plain", "Cannot create file");
+        return;
+    }
+
+    file.print(content);
+    file.close();
+    server.send(200, "text/plain", "Saved");
+}
+
+void handleApiBlocklistDelete() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    JsonDocument doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+
+    String filename = doc["filename"] | "";
+    if (filename.length() == 0 || filename.indexOf("..") != -1 || filename.indexOf("/") != -1) {
+        server.send(400, "text/plain", "Invalid filename");
+        return;
+    }
+
+    String path = "/blocklists/" + filename;
+    if (SD.remove(path)) {
+        server.send(200, "text/plain", "Deleted");
+    } else {
+        server.send(500, "text/plain", "Delete failed");
+    }
+}
+
+void handleApiBlocklistReload() {
+    if (!checkAuth()) return;
+    logRequest(server);
+
+    initBloomFilter();
+    server.send(200, "text/plain", "Bloom filter reloaded");
+}
